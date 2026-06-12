@@ -377,3 +377,60 @@ def start_dashboard(mode: str = 'DEMO'):
     print(f"🌐 Дашборд [{mode}]: http://localhost:{port}")
     socketio.run(app, host=DASHBOARD_HOST, port=port,
                  debug=False, use_reloader=False, log_output=False)
+
+
+@app.route('/chart')
+def chart():
+    return render_template('chart.html', data=current_data)
+
+
+@app.route('/api/settings', methods=['POST'])
+def save_settings():
+    data = request.json or {}
+    if 'tp' in data:
+        current_data['settings_tp'] = float(data['tp'])
+    if 'sl' in data:
+        current_data['settings_sl'] = float(data['sl'])
+    if 'min_confidence' in data:
+        current_data['min_confidence'] = float(data['min_confidence'])
+    if 'shorts_enabled' in data:
+        current_data['shorts_enabled'] = bool(data['shorts_enabled'])
+    bot = _get_bot()
+    if bot:
+        try:
+            bot.tp_pct            = current_data['settings_tp']
+            bot.sl_pct            = current_data['settings_sl']
+            bot.min_confidence    = current_data['min_confidence']
+            bot.shorts_enabled    = current_data['shorts_enabled']
+        except Exception:
+            pass
+    _save_bot_settings(current_data)
+    return jsonify({'success': True})
+
+
+@app.route('/api/keys', methods=['POST'])
+def save_keys():
+    data = request.json or {}
+    mode            = data.get('mode', 'demo')
+    master_password = data.get('master_password', '')
+    api_key         = data.get('api_key', '')
+    api_secret      = data.get('api_secret', '')
+    if not master_password or not api_key or not api_secret:
+        return jsonify({'success': False, 'error': 'missing fields'})
+    try:
+        from security.key_manager import save_credentials
+        ok = save_credentials(mode, api_key, api_secret, master_password)
+        return jsonify({'success': ok})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+
+def start_dashboard(mode: str = 'DEMO'):
+    """Запускает дашборд на нужном порту в зависимости от режима."""
+    from config.app_config import DASHBOARD_DEMO_PORT, DASHBOARD_REAL_PORT
+    port = DASHBOARD_REAL_PORT if mode == 'REAL' else DASHBOARD_DEMO_PORT
+    current_data['mode'] = mode
+    import threading
+    t = threading.Thread(target=_push_updates, daemon=True)
+    t.start()
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
