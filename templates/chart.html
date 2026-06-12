@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}График — HTT v2{% endblock %}
+{% block content %}
+<div class="container-fluid mt-3">
+  <div class="row mb-2">
+    <div class="col-md-4">
+      <select id="pairSelect" class="form-select" onchange="loadChart()">
+        {% for pair in data.get('prices', {}).keys() %}
+        <option value="{{ pair }}">{{ pair }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <select id="daysSelect" class="form-select" onchange="loadChart()">
+        <option value="1">1 день</option>
+        <option value="3" selected>3 дня</option>
+        <option value="7">7 дней</option>
+      </select>
+    </div>
+    <div class="col-md-4">
+      <span id="chartStatus" class="text-muted small">Загрузка...</span>
+    </div>
+  </div>
+  <div id="chartContainer" style="height:500px; background:#1a1a2e; border-radius:8px;">
+    <div id="chart" style="height:100%;"></div>
+  </div>
+  <div class="row mt-3">
+    <div class="col-md-6">
+      <div id="rsiContainer" style="height:150px; background:#1a1a2e; border-radius:8px;">
+        <div id="rsiChart" style="height:100%;"></div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div id="summaryBox" class="p-3 bg-dark rounded">
+        <h6 class="text-light">Статистика (30 дней)</h6>
+        <div id="summaryContent" class="text-muted small">Загрузка...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+let chart, candleSeries, smaSeries, rsiChart, rsiSeries;
+
+function initChart() {
+  chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    layout: { background: { color: '#1a1a2e' }, textColor: '#d1d4dc' },
+    grid: { vertLines: { color: '#2a2a4a' }, horzLines: { color: '#2a2a4a' } },
+    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+    rightPriceScale: { borderColor: '#485c7b' },
+    timeScale: { borderColor: '#485c7b', timeVisible: true },
+  });
+  candleSeries = chart.addCandlestickSeries({
+    upColor: '#26a69a', downColor: '#ef5350',
+    borderVisible: false,
+    wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+  });
+  smaSeries = chart.addLineSeries({ color: '#f59e0b', lineWidth: 1 });
+
+  rsiChart = LightweightCharts.createChart(document.getElementById('rsiChart'), {
+    layout: { background: { color: '#1a1a2e' }, textColor: '#d1d4dc' },
+    grid: { vertLines: { color: '#2a2a4a' }, horzLines: { color: '#2a2a4a' } },
+    rightPriceScale: { borderColor: '#485c7b' },
+    timeScale: { borderColor: '#485c7b', timeVisible: true },
+  });
+  rsiSeries = rsiChart.addLineSeries({ color: '#818cf8', lineWidth: 1 });
+}
+
+function toTs(s) {
+  return Math.floor(new Date(s).getTime() / 1000);
+}
+
+async function loadChart() {
+  const pair = document.getElementById('pairSelect').value;
+  const days = document.getElementById('daysSelect').value;
+  document.getElementById('chartStatus').textContent = 'Загрузка ' + pair + '...';
+  try {
+    const r = await fetch('/api/chart/' + pair + '?days=' + days);
+    const d = await r.json();
+    const candles = d.candles.map(c => ({
+      time: toTs(c.timestamp),
+      open: +c.open, high: +c.high, low: +c.low, close: +c.close
+    }));
+    const sma = d.sma100.map(s => ({ time: toTs(s.timestamp), value: +s.sma100 }));
+    const rsi = d.rsi.map(s => ({ time: toTs(s.timestamp), value: +s.rsi14 }));
+    candleSeries.setData(candles);
+    smaSeries.setData(sma);
+    rsiSeries.setData(rsi);
+    document.getElementById('chartStatus').textContent = pair + ' — ' + candles.length + ' свечей';
+  } catch(e) {
+    document.getElementById('chartStatus').textContent = 'Ошибка загрузки';
+  }
+}
+
+async function loadSummary() {
+  try {
+    const r = await fetch('/api/history/summary?days=30');
+    const d = await r.json();
+    document.getElementById('summaryContent').innerHTML =
+      'Сделок: <b>' + d.total + '</b> | ' +
+      'Прибыльных: <b>' + d.wins + '</b> | ' +
+      'Убыточных: <b>' + d.losses + '</b><br>' +
+      'Win rate: <b>' + d.win_rate + '%</b> | ' +
+      'PnL: <b>' + d.total_pnl_usdt + ' USDT</b>';
+  } catch(e) {}
+}
+
+initChart();
+loadChart();
+loadSummary();
+</script>
+{% endblock %}

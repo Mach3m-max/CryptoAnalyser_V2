@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Настройки — HTT v2{% endblock %}
+{% block content %}
+<div class="container mt-4" style="max-width:600px;">
+  <h5 class="text-light mb-4">Настройки бота</h5>
+
+  <div class="card bg-dark border-secondary mb-3">
+    <div class="card-header text-light">Торговые параметры</div>
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label text-muted small">Take Profit (%)</label>
+        <input type="number" id="settingTp" class="form-control bg-dark text-light border-secondary"
+               step="0.1" min="0.5" max="20" value="{{ data.get('settings_tp', 3.5) }}">
+      </div>
+      <div class="mb-3">
+        <label class="form-label text-muted small">Stop Loss (%)</label>
+        <input type="number" id="settingSl" class="form-control bg-dark text-light border-secondary"
+               step="0.1" min="0.5" max="20" value="{{ data.get('settings_sl', 3.0) }}">
+      </div>
+      <div class="mb-3">
+        <label class="form-label text-muted small">Мин. уверенность ML (%)</label>
+        <input type="number" id="settingConf" class="form-control bg-dark text-light border-secondary"
+               step="1" min="50" max="95"
+               value="{{ (data.get('min_confidence', 0.60) * 100) | int }}">
+      </div>
+      <div class="mb-3">
+        <label class="form-check-label text-muted small">
+          <input type="checkbox" id="settingShorts" class="form-check-input"
+                 {% if data.get('shorts_enabled') %}checked{% endif %}>
+          Шорты включены
+        </label>
+      </div>
+      <button class="btn btn-primary w-100" onclick="saveSettings()">Сохранить</button>
+      <div id="settingsMsg" class="mt-2 text-center small"></div>
+    </div>
+  </div>
+
+  <div class="card bg-dark border-secondary mb-3">
+    <div class="card-header text-light">API-ключи</div>
+    <div class="card-body">
+      <div class="mb-2">
+        <label class="form-label text-muted small">Мастер-пароль</label>
+        <input type="password" id="masterPwd" class="form-control bg-dark text-light border-secondary"
+               placeholder="Введите мастер-пароль">
+      </div>
+      <div class="mb-2">
+        <label class="form-label text-muted small">API Key (DEMO)</label>
+        <input type="text" id="demoKey" class="form-control bg-dark text-light border-secondary">
+      </div>
+      <div class="mb-2">
+        <label class="form-label text-muted small">API Secret (DEMO)</label>
+        <input type="password" id="demoSecret" class="form-control bg-dark text-light border-secondary">
+      </div>
+      <button class="btn btn-warning w-100 mb-2" onclick="saveKeys('demo')">Сохранить DEMO ключи</button>
+      <div class="mb-2">
+        <label class="form-label text-muted small">API Key (REAL)</label>
+        <input type="text" id="realKey" class="form-control bg-dark text-light border-secondary">
+      </div>
+      <div class="mb-2">
+        <label class="form-label text-muted small">API Secret (REAL)</label>
+        <input type="password" id="realSecret" class="form-control bg-dark text-light border-secondary">
+      </div>
+      <button class="btn btn-danger w-100" onclick="saveKeys('real')">Сохранить REAL ключи</button>
+      <div id="keysMsg" class="mt-2 text-center small"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function saveSettings() {
+  const body = {
+    tp: parseFloat(document.getElementById('settingTp').value),
+    sl: parseFloat(document.getElementById('settingSl').value),
+    min_confidence: parseInt(document.getElementById('settingConf').value) / 100,
+    shorts_enabled: document.getElementById('settingShorts').checked,
+  };
+  const r = await fetch('/api/settings', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  document.getElementById('settingsMsg').textContent =
+    d.success ? 'Сохранено' : 'Ошибка';
+}
+
+async function saveKeys(mode) {
+  const body = {
+    mode: mode,
+    master_password: document.getElementById('masterPwd').value,
+    api_key:    document.getElementById(mode + 'Key').value,
+    api_secret: document.getElementById(mode + 'Secret').value,
+  };
+  const r = await fetch('/api/keys', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  document.getElementById('keysMsg').textContent =
+    d.success ? 'Ключи сохранены' : ('Ошибка: ' + (d.error || ''));
+}
+</script>
+{% endblock %}
