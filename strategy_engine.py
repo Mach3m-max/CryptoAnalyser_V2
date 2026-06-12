@@ -8,7 +8,7 @@ from datetime import datetime
 from config import OPTIMAL_PARAMS, TECH_PARAMS
 from signal_cache import SignalCache
 from strategy_logger import log_signal_tick
-from indicator_logger import log_indicators
+from logging_v2.indicator_logger import log_indicators
 
 
 class StrategyEngine:
