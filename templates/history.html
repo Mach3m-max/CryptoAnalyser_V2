@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}История{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-title">История сделок</div>
+
+  {% if trades %}
+  <!-- Summary stats -->
+  {% set wins  = trades|selectattr('pnl_pct')|selectattr('pnl_pct','gt','0')|list %}
+  {% set total = trades|length %}
+  <div class="grid3" style="margin-bottom:16px">
+    <div class="card" style="padding:12px 16px">
+      <div class="stat">
+        <div class="stat-val">{{ total }}</div>
+        <div class="stat-label">Всего сделок</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px 16px">
+      <div class="stat">
+        <div class="stat-val green">{{ wins|length }}</div>
+        <div class="stat-label">Прибыльных</div>
+      </div>
+    </div>
+    <div class="card" style="padding:12px 16px">
+      <div class="stat">
+        <div class="stat-val {{ 'green' if wins|length / total > 0.5 else 'red' }}">
+          {{ '%.0f%%'|format(wins|length / total * 100) }}
+        </div>
+        <div class="stat-label">Win Rate</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0">
+    <table>
+      <thead><tr>
+        <th>Время закрытия</th><th>Пара</th><th>Тип</th>
+        <th>Вход</th><th>Выход</th><th>PnL %</th><th>PnL USDT</th><th>Режим</th>
+      </tr></thead>
+      <tbody>
+      {% for t in trades %}
+        {% set pnl = t.pnl_pct|default('')|string %}
+        {% set pnl_f = pnl|float if pnl else 0 %}
+        {% set reason = t.close_reason|default(t.event_type|replace('POSITION_CLOSED_','')) %}
+        <tr style="
+          {% if pnl_f > 0 %}background:rgba(63,185,80,.04)
+          {% elif pnl_f < 0 %}background:rgba(248,81,73,.04)
+          {% endif %}">
+          <td class="mono muted" style="font-size:11px">{{ t.timestamp[:16] }}</td>
+          <td>
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ t.symbol.replace('USDT','/USDT') }}"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ t.symbol }}
+            </a>
+          </td>
+          <td>
+            {% if reason in ('TP','POSITION_CLOSED_TP') %}
+              <span style="color:var(--green);font-size:11px;font-weight:600">TP</span>
+            {% elif reason in ('SL','POSITION_CLOSED_SL') %}
+              <span style="color:var(--red);font-size:11px;font-weight:600">SL</span>
+            {% elif 'TRAIL' in reason %}
+              <span style="color:var(--blue);font-size:11px;font-weight:600">TRAIL</span>
+            {% elif 'MANUAL' in reason or 'EARLY' in reason %}
+              <span style="color:var(--yellow);font-size:11px;font-weight:600">MANUAL</span>
+            {% else %}
+              <span class="muted" style="font-size:11px">{{ reason[:8] }}</span>
+            {% endif %}
+          </td>
+          <td class="mono" style="font-size:12px">{{ t.entry_price|default('—') }}</td>
+          <td class="mono" style="font-size:12px">{{ t.price|default('—') }}</td>
+          <td class="mono {{ 'green' if pnl_f > 0 else 'red' if pnl_f < 0 else 'muted' }}"
+              style="font-weight:600">
+            {{ ('%+.2f%%'|format(pnl_f)) if pnl else '—' }}
+          </td>
+          <td class="mono {{ 'green' if pnl_f > 0 else 'red' if pnl_f < 0 else 'muted' }}">
+            {% set pnl_u = t.pnl_usdt|default('')|string %}
+            {{ ('%+.2f'|format(pnl_u|float)) if pnl_u else '—' }}
+          </td>
+          <td class="muted" style="font-size:11px">{{ t.mode|default('DEMO') }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:48px;color:var(--muted)">
+    История сделок пуста — данные появятся после первых закрытий позиций
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

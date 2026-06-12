@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Позиции{% endblock %}
+{% block content %}
+<div class="page">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+    <div class="page-title">Открытые позиции</div>
+    <button class="btn btn-red" onclick="closeAll()">Закрыть все</button>
+  </div>
+
+  {% set positions = data.portfolio.get('open_positions', {}) %}
+  {% if positions %}
+  <div class="card" style="padding:0">
+    <table>
+      <thead><tr>
+        <th>Пара</th><th>Направление</th><th>Вход</th><th>Текущая</th>
+        <th>PnL %</th><th>PnL USDT</th><th>Сумма</th><th>Держим</th><th></th>
+      </tr></thead>
+      <tbody>
+      {% for sym, pos in positions.items() %}
+        {% set entry = pos.entry_price|float %}
+        {% set cur   = data.prices.get(sym, 0)|float %}
+        {% set pnl_pct  = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
+        {% set pnl_usdt = (pos.usdt_amount|float * pnl_pct / 100) if entry > 0 else 0 %}
+        <tr>
+          <td>
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ sym.replace('USDT','/USDT') }}"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ sym }}
+            </a>
+          </td>
+          <td><span style="color:var(--green);font-size:11px;font-weight:600">▲ LONG</span></td>
+          <td class="mono">{{ '%.4f'|format(entry) if entry > 0 else '—' }}</td>
+          <td class="mono" id="cur-{{ sym }}">{{ '%.4f'|format(cur) if cur > 0 else '—' }}</td>
+          <td class="mono {{ 'green' if pnl_pct > 0 else 'red' if pnl_pct < 0 else 'muted' }}"
+              id="pnlpct-{{ sym }}">
+            {{ '%+.2f%%'|format(pnl_pct) if entry > 0 else '?' }}
+          </td>
+          <td class="mono {{ 'green' if pnl_usdt > 0 else 'red' if pnl_usdt < 0 else 'muted' }}"
+              id="pnlusdt-{{ sym }}">
+            {{ '%+.2f'|format(pnl_usdt) if entry > 0 else '?' }}
+          </td>
+          <td class="mono muted">{{ '%.2f'|format(pos.usdt_amount|float) }}</td>
+          <td class="muted" style="font-size:11px" id="hold-{{ sym }}">
+            {% set age = (now - pos.open_time) if pos.open_time else 0 %}—
+          </td>
+          <td>
+            <button class="btn btn-red" style="padding:4px 12px"
+                    onclick="closePos('{{ sym }}')">Закрыть</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card" style="text-align:center;padding:48px;color:var(--muted)">
+    Нет открытых позиций
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function closePos(sym) {
+  if(!confirm('Закрыть ' + sym + '?')) return;
+  fetch('/api/close_position', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({symbol:sym})
+  }).then(r=>r.json()).then(d=>{
+    toast(d.ok?'✅ Закрыто':'❌ '+d.message, d.ok);
+    if(d.ok) setTimeout(()=>location.reload(),1500);
+  });
+}
+function closeAll() {
+  if(!confirm('Закрыть ВСЕ позиции?')) return;
+  fetch('/api/close_all',{method:'POST'}).then(r=>r.json()).then(d=>{
+    toast(d.ok?'✅ '+d.message:'❌ '+d.message, d.ok);
+    if(d.ok) setTimeout(()=>location.reload(),2000);
+  });
+}
+// Live PnL update
+socket.on('update', d => {
+  const prices = d.prices || {};
+  const pos = d.portfolio?.open_positions || {};
+  for(const [sym, p] of Object.entries(pos)) {
+    const entry = parseFloat(p.entry_price)||0;
+    const cur   = parseFloat(prices[sym])||0;
+    if(!entry||!cur) continue;
+    const pct  = (cur-entry)/entry*100;
+    const usdt = parseFloat(p.usdt_amount)*pct/100;
+    const el = document.getElementById('pnlpct-'+sym);
+    const eu = document.getElementById('pnlusdt-'+sym);
+    const ec = document.getElementById('cur-'+sym);
+    if(el) { el.textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
+              el.className='mono '+(pct>0?'green':pct<0?'red':'muted'); }
+    if(eu) { eu.textContent=(usdt>=0?'+':'')+usdt.toFixed(2);
+              eu.className='mono '+(usdt>0?'green':usdt<0?'red':'muted'); }
+    if(ec) ec.textContent=cur.toFixed(4);
+  }
+});
+</script>
+{% endblock %}

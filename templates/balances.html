@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Баланс{% endblock %}
+{% block content %}
+<div class="page">
+  <div class="page-title">Балансы</div>
+
+  <div class="grid2" style="margin-bottom:16px">
+    <div class="card">
+      <div class="card-title">Итого</div>
+      <div style="font-size:32px;font-weight:700;font-family:var(--mono)" id="total-usdt">
+        {{ data.balances.total_usdt|default('—') }}
+      </div>
+      <div class="muted" style="font-size:12px;margin-top:4px">USDT (все активы)</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Доступно</div>
+      <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:var(--green)"
+           id="free-usdt">—</div>
+      <div class="muted" style="font-size:12px;margin-top:4px">Свободный USDT</div>
+    </div>
+  </div>
+
+  <!-- Open positions value breakdown -->
+  {% set positions = data.portfolio.get('open_positions', {}) %}
+  {% if positions %}
+  <div class="card">
+    <div class="card-title">В открытых позициях</div>
+    <table>
+      <thead><tr>
+        <th>Инструмент</th><th>Сумма входа</th><th>Текущая цена</th><th>Оценка</th><th>PnL</th>
+      </tr></thead>
+      <tbody>
+      {% for sym, pos in positions.items() %}
+        {% set entry = pos.entry_price|float %}
+        {% set cur   = data.prices.get(sym, 0)|float %}
+        {% set usdt  = pos.usdt_amount|float %}
+        {% set pnl_pct  = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
+        {% set cur_val  = usdt * (1 + pnl_pct/100) if entry > 0 else usdt %}
+        <tr>
+          <td style="font-weight:600">{{ sym }}</td>
+          <td class="mono muted">{{ '%.2f'|format(usdt) }}</td>
+          <td class="mono">{{ '%.4f'|format(cur) if cur else '—' }}</td>
+          <td class="mono">{{ '%.2f'|format(cur_val) if entry > 0 else '—' }}</td>
+          <td class="mono {{ 'green' if pnl_pct > 0 else 'red' if pnl_pct < 0 else 'muted' }}">
+            {{ '%+.2f%%'|format(pnl_pct) if entry > 0 else '—' }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+socket.on('update', d => {
+  if(d.balances?.total_usdt)
+    document.getElementById('total-usdt').textContent =
+      parseFloat(d.balances.total_usdt).toFixed(2) + ' USDT';
+});
+</script>
+{% endblock %}
