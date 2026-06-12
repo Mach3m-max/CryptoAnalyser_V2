@@ -1,0 +1,80 @@
+D:\Phyton\CryptoAnalyzer_V_2\
+│
+├── stable_core\                    ← ШАГ 2: отлаженный API-клиент (verbatim v1)
+│   ├── __init__.py
+│   ├── bybit_client.py
+│   └── order_executor.py
+│
+├── config\                         ← ШАГ 3: конфигурация
+│   ├── app_config.py
+│   └── pairs_config.json
+│
+├── security\                       ← ШАГ 4: шифрование ключей
+│   ├── __init__.py
+│   └── key_manager.py
+│
+├── credentials\                    ← НЕ В GIT, создаётся автоматически
+│   ├── demo.enc
+│   └── real.enc
+│
+├── bot\                            ← ШАГ 6+8: ядро бота
+│   ├── __init__.py
+│   └── core.py
+│
+├── logging_v2\                     ← ШАГ 7: новый логгер
+│   ├── __init__.py
+│   ├── candle_logger.py
+│   ├── indicator_logger.py
+│   └── decision_logger.py
+│
+├── dashboard\                      ← ШАГ 9: веб-дашборд
+│   ├── __init__.py
+│   └── app.py
+│
+├── templates\                      ← ШАГ 9: HTML страницы
+│   ├── base.html
+│   ├── index.html
+│   ├── positions.html
+│   ├── history.html
+│   ├── balances.html
+│   └── settings.html
+│
+├── static\
+│   ├── css\
+│   │   └── main.css
+│   └── js\
+│       └── dashboard.js
+│
+├── ml\                             ← ШАГ 5: скопировать из v1
+│   ├── __init__.py
+│   ├── ml_strategy_engine.py
+│   ├── train.py
+│   ├── models\                     ← скопировать *.pkl из v1
+│   └── staging\
+│
+├── data\                           ← НЕ В GIT, создаётся ботом
+│   ├── candles\
+│   ├── indicators\
+│   ├── signals\
+│   ├── decisions\
+│   └── historical\                 ← скопировать *_30d.csv из v1
+│
+├── logs\                           ← НЕ В GIT
+│
+├── labels\                         ← ручные метки (создаётся дашбордом)
+│
+│── portfolio_manager.py            ← ШАГ 6: v1 + фикс
+│── strategy_engine.py              ← ШАГ 5: verbatim v1
+│── data_loader.py                  ← ШАГ 5: verbatim v1
+│── signal_cache.py                 ← ШАГ 5: verbatim v1
+│── strategy_logger.py              ← ШАГ 5: verbatim v1 (legacy)
+│── compute_historical_indicators.py← ШАГ 5: verbatim v1
+│── download_history.py             ← ШАГ 5: verbatim v1
+│── backtester.py                   ← ШАГ 5: verbatim v1
+│── simulator.py                    ← ШАГ 5: verbatim v1
+│
+├── main.py                         ← ШАГ 10: точка входа
+├── requirements.txt                ← ШАГ 1
+├── .gitignore                      ← ШАГ 1
+├── push.bat                        ← ШАГ 1
+└── pull.bat                        ← ШАГ 1

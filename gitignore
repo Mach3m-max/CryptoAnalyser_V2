@@ -1,0 +1,53 @@
+# ── Данные (большие файлы, не нужны в репо) ─────────────────────────────────
+data/
+logs/
+labels/
+backtest_results/
+trade_history/
+
+# ── ML-модели и данные обучения ───────────────────────────────────────────────
+ml/models/
+ml/staging/
+ml/archive/
+ml/historical_data/
+
+# ── Секреты и ключи ───────────────────────────────────────────────────────────
+credentials/
+config.json
+configReal.json
+bot_settings.json
+order_ids_demo.json
+order_ids_real.json
+entry_prices.json
+signal_cache.json
+*.enc
+*.key
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+venv/
+.venv/
+env/
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.suo
+*.user
+
+# ── ОС ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Временные файлы ───────────────────────────────────────────────────────────
+*.tmp
+*.bak
+zip/
