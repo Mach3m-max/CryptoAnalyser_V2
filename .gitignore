@@ -1,22 +1,21 @@
-# .gitignore
-# ── Данные (большие файлы, не нужны в репо) ─────────────────────────────────
+# Данные
 data/
 logs/
 labels/
 backtest_results/
 trade_history/
 
-# ── ML-модели и данные обучения ───────────────────────────────────────────────
+# 
 ml/models/
 ml/staging/
 ml/production/
 ml/archive/
 ml/historical_data/
 
-# ── Секреты и ключи ───────────────────────────────────────────────────────────
+# Секреты
 credentials/
 config.json
-configReal.json
+configeal.json
 bot_settings.json
 order_ids_demo.json
 order_ids_real.json
@@ -25,34 +24,24 @@ signal_cache.json
 *.enc
 *.key
 
-# ── Python ────────────────────────────────────────────────────────────────────
+# ython
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-*.egg-info/
-.eggs/
-dist/
-build/
 venv/
 .venv/
 env/
 
-# ── IDE ───────────────────────────────────────────────────────────────────────
+# 
 .idea/
 .vscode/
-*.suo
-*.user
 
-# ── ОС ────────────────────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
+# 
+._tore
+humbs.db
 desktop.ini
 
-# ── Временные файлы ───────────────────────────────────────────────────────────
+# emp
 *.tmp
 *.bak
 zip/
-
-# ── Дашборд runtime ──────────────────────────────────────────────────────────
-static/js/lightweight-charts.js
