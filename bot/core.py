@@ -227,10 +227,6 @@ class TradingBot:
 
                 current_data['prices'] = prices
 
-                if not current_data.get('trading_allowed', False):
-                    time.sleep(ANALYZE_INTERVAL_SEC)
-                    continue
-
                 # Обновляем свечи
                 for sym in self.active_pairs:
                     try:
@@ -246,7 +242,8 @@ class TradingBot:
                     if df is None or len(df) < 200:
                         continue
                     try:
-                        signal = self.strategy.analyze_pair(sym, df)
+                        current_price = float(prices.get(sym, 0))
+                        signal = self.strategy.analyze_pair(sym, df, current_price)
                         if signal:
                             self.signals[sym] = signal
                             self._process_signal(sym, signal, prices.get(sym, 0))
