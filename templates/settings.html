@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+
+{% block extra_head %}
+<style>
+  .wrap { max-width: 900px; margin: 24px auto; padding: 0 20px; }
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 20px; margin-bottom: 20px;
+  }
+  .panel h2 {
+    font-size: 14px; color: var(--text); margin-bottom: 16px;
+    text-transform: uppercase; letter-spacing: 1px;
+  }
+  .panel h3 {
+    font-size: 12px; color: var(--muted); margin: 16px 0 8px;
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .row { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .field { flex: 1; min-width: 200px; }
+  .field label {
+    display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px;
+  }
+  .field input, .field select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 8px 10px; color: var(--text);
+    font-family: var(--mono); font-size: 13px;
+  }
+  .field input:focus, .field select:focus { outline: none; border-color: var(--accent); }
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: opacity .15s;
+  }
+  .btn:hover { opacity: .85; }
+  .btn.danger { background: var(--red); }
+  .btn.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .mode-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+  .mode-tab {
+    padding: 6px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: transparent; color: var(--muted); cursor: pointer; font-size: 13px;
+  }
+  .mode-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; padding: 6px 8px;
+       border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: 4px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td input {
+    width: 64px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 4px; padding: 4px 6px; color: var(--text); font-family: var(--mono);
+    font-size: 12px;
+  }
+  td input[type="checkbox"] { width: auto; }
+  .table-wrap { overflow-x: auto; }
+  .status-line { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="wrap">
+
+  <!-- ── API-ключи ─────────────────────────────────────────────── -->
+  <div class="panel">
+    <h2>🔐 API-ключи Bybit</h2>
+
+    <div class="mode-tabs">
+      <button type="button" class="mode-tab active" data-mode="demo" onclick="switchCredMode('demo')">DEMO</button>
+      <button type="button" class="mode-tab" data-mode="real" onclick="switchCredMode('real')">REAL</button>
+    </div>
+
+    <form id="cred-form" onsubmit="return saveCredentials(event)">
+      <input type="hidden" id="cred-mode" value="demo">
+      <div class="row">
+        <div class="field">
+          <label>API Key</label>
+          <input type="password" id="api-key" autocomplete="off" placeholder="API Key">
+        </div>
+        <div class="field">
+          <label>API Secret</label>
+          <input type="password" id="api-secret" autocomplete="off" placeholder="API Secret">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Мастер-пароль</label>
+          <input type="password" id="master-password" autocomplete="new-password" placeholder="Мастер-пароль">
+        </div>
+      </div>
+      <button type="submit" class="btn">Сохранить ключи</button>
+      <div class="hint" id="cred-hint">
+        DEMO ключи: bybit.com → Demo Trading → API Management.<br>
+        REAL ключи: bybit.com → Main Account → API Management.
+      </div>
+      <div class="status-line" id="cred-status"></div>
+    </form>
+  </div>
+
+  <!-- ── Шорты (Spot Margin) ─────────────────────────────────────────────── -->
+  <div class="panel">
+    <h2 style="color:var(--red)">📉 Шорты (Spot Margin)</h2>
+    <div class="row" style="align-items:center">
+      <div class="field" style="flex:none">
+        <label style="display:flex; align-items:center; gap:10px; cursor:pointer">
+          <input type="checkbox" id="shorts-toggle" onchange="toggleShorts()"
+                 style="width:20px; height:20px; accent-color:var(--red)"
+                 {% if data.shorts_enabled %}checked{% endif %}>
+          <span id="shorts-status" style="font-weight:600"
+                >{{ 'ВКЛЮЧЕНЫ' if data.shorts_enabled else 'ВЫКЛЮЧЕНЫ' }}</span>
+        </label>
+      </div>
+    </div>
+    <div class="hint">
+      При включении сигнал SELL без баланса актива открывает Spot Margin шорт
+      (биржа сама занимает монету). Требует включённой "Маржинальной торговли
+      на споте" в настройках аккаунта Bybit. Общий лимит позиций (лонги + шорты)
+      берётся из "Макс. позиций" ниже.
+    </div>
+  </div>
+
+  <!-- ── Глобальные параметры ─────────────────────────────────────── -->
+  <div class="panel">
+    <h2>⚙️ Глобальные параметры</h2>
+    <form id="settings-form" onsubmit="return saveSettings(event)">
+      <div class="row">
+        <div class="field">
+          <label>Take Profit, %</label>
+          <input type="number" step="0.1" id="tp-pct" value="{{ data.settings_tp }}">
+        </div>
+        <div class="field">
+          <label>Stop Loss, %</label>
+          <input type="number" step="0.1" id="sl-pct" value="{{ data.settings_sl }}">
+        </div>
+        <div class="field">
+          <label>Мин. уверенность</label>
+          <input type="number" step="0.01" id="min-confidence" value="{{ data.min_confidence }}">
+        </div>
+        <div class="field">
+          <label style="color:var(--red)">Мин. уверенность (шорт)</label>
+          <input type="number" step="0.01" id="short-min-confidence"
+                 value="{{ data.short_min_confidence|default(0.75) }}">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Макс. позиций</label>
+          <input type="number" step="1" id="max-positions" placeholder="напр. 3">
+        </div>
+        <div class="field">
+          <label>Делитель позиции</label>
+          <input type="number" step="1" id="position-divider" placeholder="напр. 3">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label>Порог безубытка, %</label>
+          <input type="number" step="0.1" id="breakeven-trigger" placeholder="напр. 0.5">
+        </div>
+        <div class="field">
+          <label>Трейлинг, %</label>
+          <input type="number" step="0.1" id="trailing-pct" placeholder="напр. 1.0">
+        </div>
+      </div>
+      <button type="submit" class="btn">Сохранить параметры</button>
+      <div class="status-line" id="settings-status"></div>
+    </form>
+  </div>
+
+  <!-- ── Параметры по парам ───────────────────────────────────────── -->
+  <div class="panel">
+    <h2>📊 Параметры по парам</h2>
+    <div class="table-wrap">
+      <table id="pairs-table">
+        <thead>
+          <tr>
+            <th>Пара</th>
+            <th>TP %</th>
+            <th>SL %</th>
+            <th>Min conf</th>
+            <th>Breakeven %</th>
+            <th>Trail %</th>
+            <th>DEMO</th>
+            <th>REAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pair, p in pairs_config.items() %}
+          <tr data-pair="{{ pair }}">
+            <td>
+              <a href="https://www.bybit.com/ru-RU/trade/spot/{{ pair.replace('USDT','/USDT') }}"
+                 target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+                {{ pair }}
+              </a>
+            </td>
+            <td><input type="number" step="0.1" class="p-tp" value="{{ p.tp if p.tp is defined else '' }}"></td>
+            <td><input type="number" step="0.1" class="p-sl" value="{{ p.sl if p.sl is defined else '' }}"></td>
+            <td><input type="number" step="0.01" class="p-conf" value="{{ p.min_conf if p.min_conf is defined else '' }}"></td>
+            <td><input type="number" step="0.1" class="p-be" value="{{ p.breakeven if p.breakeven is defined else '' }}"></td>
+            <td><input type="number" step="0.1" class="p-trail" value="{{ p.trail if p.trail is defined else '' }}"></td>
+            <td><input type="checkbox" class="p-demo" {% if p.demo_enabled %}checked{% endif %}></td>
+            <td><input type="checkbox" class="p-real" {% if p.real_enabled %}checked{% endif %}></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" style="color:var(--muted)">config/pairs_config.json пуст или не найден</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <br>
+    <button type="button" class="btn" onclick="savePairParams()">Сохранить таблицу пар</button>
+    <div class="status-line" id="pairs-status"></div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function toggleShorts() {
+    fetch('/api/toggle_shorts', {method: 'POST'})
+      .then(r => r.json())
+      .then(d => {
+        const cb = document.getElementById('shorts-toggle');
+        const st = document.getElementById('shorts-status');
+        if (d.success) {
+          cb.checked = d.shorts_enabled;
+          st.textContent = d.shorts_enabled ? 'ВКЛЮЧЕНЫ' : 'ВЫКЛЮЧЕНЫ';
+          st.style.color = d.shorts_enabled ? 'var(--red)' : 'var(--text)';
+        } else {
+          cb.checked = !cb.checked;  // откатываем чекбокс при ошибке
+          alert('❌ ' + (d.error || 'Ошибка'));
+        }
+      })
+      .catch(e => {
+        document.getElementById('shorts-toggle').checked =
+          !document.getElementById('shorts-toggle').checked;
+        alert('❌ Ошибка запроса: ' + e);
+      });
+  }
+
+  function switchCredMode(mode) {
+    document.getElementById('cred-mode').value = mode;
+    document.querySelectorAll('.mode-tab').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+  }
+
+  function saveCredentials(ev) {
+    ev.preventDefault();
+    const mode     = document.getElementById('cred-mode').value;
+    const api_key  = document.getElementById('api-key').value.trim();
+    const api_secret = document.getElementById('api-secret').value.trim();
+    const master_password = document.getElementById('master-password').value;
+    const statusEl = document.getElementById('cred-status');
+
+    if (!api_key || !api_secret || !master_password) {
+      statusEl.textContent = 'Заполните все поля.';
+      statusEl.style.color = 'var(--red)';
+      return false;
+    }
+
+    fetch('/api/credentials', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({mode, api_key, api_secret, master_password})
+    })
+    .then(r => r.json())
+    .then(d => {
+      statusEl.textContent = d.message || (d.success ? 'Готово' : 'Ошибка');
+      statusEl.style.color = d.success ? 'var(--green)' : 'var(--red)';
+      if (d.success) {
+        document.getElementById('api-key').value = '';
+        document.getElementById('api-secret').value = '';
+        document.getElementById('master-password').value = '';
+        toast('Ключи [' + mode.toUpperCase() + '] сохранены');
+      } else {
+        toast(d.error || 'Ошибка сохранения ключей', false);
+      }
+    })
+    .catch(e => {
+      statusEl.textContent = 'Ошибка запроса: ' + e;
+      statusEl.style.color = 'var(--red)';
+    });
+    return false;
+  }
+
+  function saveSettings(ev) {
+    ev.preventDefault();
+    const statusEl = document.getElementById('settings-status');
+    const payload = {
+      tp_pct:            document.getElementById('tp-pct').value,
+      sl_pct:            document.getElementById('sl-pct').value,
+      min_confidence:    document.getElementById('min-confidence').value,
+      short_min_confidence: document.getElementById('short-min-confidence').value,
+      max_positions:     document.getElementById('max-positions').value,
+      position_divider:  document.getElementById('position-divider').value,
+      breakeven_trigger: document.getElementById('breakeven-trigger').value,
+      trailing_pct:      document.getElementById('trailing-pct').value,
+    };
+    // Убираем пустые поля, чтобы не затирать сервер нулями
+    Object.keys(payload).forEach(k => { if (payload[k] === '') delete payload[k]; });
+
+    fetch('/api/update_settings', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(d => {
+      statusEl.textContent = d.success ? ('Сохранено: ' + (d.changed || []).join(', ')) : 'Ошибка';
+      statusEl.style.color = d.success ? 'var(--green)' : 'var(--red)';
+      toast(d.success ? 'Параметры сохранены' : 'Ошибка сохранения', d.success);
+    })
+    .catch(e => {
+      statusEl.textContent = 'Ошибка запроса: ' + e;
+      statusEl.style.color = 'var(--red)';
+    });
+    return false;
+  }
+
+  function savePairParams() {
+    const statusEl = document.getElementById('pairs-status');
+    const rows = document.querySelectorAll('#pairs-table tbody tr[data-pair]');
+    const params = {};
+    rows.forEach(row => {
+      const pair = row.dataset.pair;
+      params[pair] = {
+        tp:           parseFloat(row.querySelector('.p-tp').value)    || 0,
+        sl:           parseFloat(row.querySelector('.p-sl').value)    || 0,
+        min_conf:     parseFloat(row.querySelector('.p-conf').value)  || 0,
+        breakeven:    parseFloat(row.querySelector('.p-be').value)    || 0,
+        trail:        parseFloat(row.querySelector('.p-trail').value) || 0,
+        demo_enabled: row.querySelector('.p-demo').checked,
+        real_enabled: row.querySelector('.p-real').checked,
+      };
+    });
+
+    fetch('/api/pair_params', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({params})
+    })
+    .then(r => r.json())
+    .then(d => {
+      statusEl.textContent = d.success ? 'Таблица пар сохранена' : ('Ошибка: ' + d.error);
+      statusEl.style.color = d.success ? 'var(--green)' : 'var(--red)';
+      toast(d.success ? 'Параметры пар сохранены' : 'Ошибка сохранения', d.success);
+    })
+    .catch(e => {
+      statusEl.textContent = 'Ошибка запроса: ' + e;
+      statusEl.style.color = 'var(--red)';
+    });
+  }
+</script>
+{% endblock %}

@@ -29,12 +29,81 @@ FIELDNAMES = [
     "close_reason",   # TP / SL / TRAIL / MANUAL / UNKNOWN
     "pnl_pct",        # PnL в % от входа
     "pnl_usdt",       # PnL в USDT (с учётом комиссий)
+    # ── поля v3: "живой" датасет для анализа/дообучения ────────────────────
+    "source",           # какая модель дала сигнал: ml_rf / ml_xgb
+    "f1_model",         # offline F1-score этой модели (из train.py)
+    "rsi_14",
+    "atr_pct",
+    "bb_position",
+    "bb_width",
+    "macd_hist_norm",
+    "dev_spread",
+    "dev_momentum",
+    "deviation",
+    "indicators_json",  # catch-all: полный сырой словарь signal на момент решения
 ]
 
 
 def _today_path() -> str:
     date_str = datetime.now().strftime("%Y-%m-%d")
     return os.path.join(DECISIONS_DIR, f"decisions_{date_str}.csv")
+
+
+def signal_snapshot(signal: dict) -> dict:
+    """
+    Извлекает из словаря signal (см. ml_strategy_engine) поля для 'живого'
+    датасета — источник модели + ключевые индикаторы на момент решения.
+    Использование: log_decision(..., **signal_snapshot(signal))
+                   log_close(..., **signal_snapshot(signal))
+    Полный сырой signal дополнительно кладётся в indicators_json — на случай,
+    если понадобится индикатор, для которого пока нет отдельной колонки.
+    """
+    if not signal:
+        return {}
+    import json as _json
+    fields = ('source', 'f1_model', 'rsi_14', 'atr_pct', 'bb_position',
+              'bb_width', 'macd_hist_norm', 'dev_spread', 'dev_momentum',
+              'deviation')
+    snap = {f: signal.get(f, "") for f in fields}
+    try:
+        snap['indicators_json'] = _json.dumps(signal, ensure_ascii=False, default=str)
+    except Exception:
+        snap['indicators_json'] = ""
+    return snap
+
+
+def _ensure_schema(path: str):
+    """
+    Если файл уже существует, но его шапка не совпадает с текущими
+    FIELDNAMES (например, бот обновили в середине дня, добавив новые поля) —
+    переименовываем старый файл в .schema_bak и начинаем новый с актуальной
+    шапкой. Смешение разных схем в одном файле ломает и чтение (pandas),
+    и сам файл для будущего анализа.
+    """
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            header_line = f.readline().rstrip("\n\r")
+        existing = header_line.split(";")
+        if existing != FIELDNAMES:
+            bak_path = path + f".schema_bak_{datetime.now().strftime('%H%M%S')}"
+            os.replace(path, bak_path)
+            print(f"⚠️ Схема decisions-лога изменилась — старый файл сохранён как "
+                  f"{os.path.basename(bak_path)}, начат новый с актуальной шапкой")
+    except Exception as e:
+        print(f"⚠️ Не удалось проверить схему {path}: {e}")
+
+
+def ensure_today_schema():
+    """
+    Публичная обёртка — проверяет и при необходимости чинит схему СЕГОДНЯШНЕГО
+    файла сразу при старте бота, не дожидаясь первой записи через log_decision().
+    Без этого файл, начатый до обновления набора полей, продолжает ломать
+    чтение (pandas/analytics) вплоть до первой новой сделки за день.
+    """
+    with _LOCK:
+        _ensure_schema(_today_path())
 
 
 def log_decision(**kwargs):
@@ -48,6 +117,7 @@ def log_decision(**kwargs):
         row["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     with _LOCK:
+        _ensure_schema(path)
         file_exists = os.path.exists(path)
         with open(path, "a", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=FIELDNAMES, delimiter=";")

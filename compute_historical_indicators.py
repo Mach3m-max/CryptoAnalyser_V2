@@ -1,4 +1,3 @@
-from typing import Optional
 #!/usr/bin/env python3
 """
 compute_historical_indicators.py
@@ -22,6 +21,7 @@ v1 verbatim — ЕДИНСТВЕННОЕ изменение: все пути →
 """
 
 from __future__ import annotations
+from typing import Optional
 import argparse
 import os
 import sys

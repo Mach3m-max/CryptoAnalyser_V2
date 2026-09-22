@@ -115,6 +115,7 @@
   <a href="/"         class="{% if request.path == '/' %}active{% endif %}">Анализ</a>
   <a href="/positions"class="{% if request.path == '/positions' %}active{% endif %}">Позиции</a>
   <a href="/history"  class="{% if request.path == '/history' %}active{% endif %}">История</a>
+  <a href="/analytics" class="{% if request.path == '/analytics' %}active{% endif %}">Аналитика</a>
   <a href="/balances" class="{% if request.path == '/balances' %}active{% endif %}">Баланс</a>
   <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Настройки</a>
   <div class="nav-right">
@@ -134,6 +135,25 @@
 {% block content %}{% endblock %}
 
 <script>
+  // ── Запоминание фильтра /history и /analytics между переключениями вкладок ──
+  // Пункты меню — обычные ссылки без параметров, поэтому клик по ним всегда
+  // вёл на умолчания. Запоминаем последний использованный ?query для этих
+  // двух страниц и подставляем его в ссылки навигации.
+  (function () {
+    var path = window.location.pathname;
+    var filterPaths = ['/history', '/analytics'];
+    if (filterPaths.includes(path) && window.location.search) {
+      localStorage.setItem('htt_filter' + path, window.location.search);
+    }
+    document.querySelectorAll('.nav a').forEach(function (a) {
+      var href = a.getAttribute('href');
+      if (filterPaths.includes(href)) {
+        var saved = localStorage.getItem('htt_filter' + href);
+        if (saved) a.setAttribute('href', href + saved);
+      }
+    });
+  })();
+
   // WebSocket
   const socket = io();
   socket.on('update', data => window._state = data);
@@ -168,6 +188,63 @@
     if(el && d.balances && d.balances.total_usdt)
       el.textContent = parseFloat(d.balances.total_usdt).toFixed(2) + ' USDT';
   });
+
+  // ── Тихое автообновление содержимого страницы (без перезагрузки/мерцания) ──
+  // На /settings отключено — там форма ввода ключей, перезатирать нельзя.
+  if (!window.location.pathname.startsWith('/settings')) {
+    setInterval(() => {
+      // Не обновляем, если открыто модальное окно (покупка или продажа/шорт на /)
+      const modal = document.getElementById('buy-modal');
+      const sellModal = document.getElementById('sell-modal');
+      if ((modal && modal.style.display === 'flex') ||
+          (sellModal && sellModal.style.display === 'flex')) return;
+
+      // Не обновляем, если пользователь сейчас печатает в каком-то поле
+      const active = document.activeElement;
+      if (active && ['INPUT', 'SELECT', 'TEXTAREA'].includes(active.tagName)) return;
+
+      fetch(window.location.pathname + window.location.search, {cache: 'no-store'})
+        .then(r => r.ok ? r.text() : null)
+        .then(html => {
+          if (!html) return;
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+
+          // Сохраняем клиентские лог-блоки (заполняются JS после нажатия кнопки,
+          // сервер о них не знает — без этого их каждые 8с стирает свежий HTML)
+          const curPageBefore = document.querySelector('.page');
+          const preservedLogs = {};
+          if (curPageBefore) {
+            curPageBefore.querySelectorAll('[id$="-log"]').forEach(el => {
+              preservedLogs[el.id] = {html: el.innerHTML, display: el.style.display};
+            });
+          }
+
+          // Основной контент страницы
+          const newPage = doc.querySelector('.page');
+          const curPage = document.querySelector('.page');
+          if (newPage && curPage) curPage.innerHTML = newPage.innerHTML;
+
+          // Восстанавливаем сохранённые логи в свежий DOM
+          Object.keys(preservedLogs).forEach(id => {
+            const el = document.getElementById(id);
+            if (el && preservedLogs[id].html.trim()) {
+              el.innerHTML = preservedLogs[id].html;
+              el.style.display = preservedLogs[id].display;
+            }
+          });
+
+          // Бейдж режима и кнопка торговли — тоже могли измениться
+          const newBadge = doc.getElementById('mode-badge');
+          const curBadge = document.getElementById('mode-badge');
+          if (newBadge && curBadge) curBadge.outerHTML = newBadge.outerHTML;
+
+          const newTradeBtn = doc.getElementById('trade-toggle');
+          const curTradeBtn = document.getElementById('trade-toggle');
+          if (newTradeBtn && curTradeBtn) curTradeBtn.outerHTML = newTradeBtn.outerHTML;
+        })
+        .catch(() => { /* бот перезапускается или сеть моргнула — просто пропускаем тик */ });
+    }, 8000);
+  }
 </script>
 
 {% block scripts %}{% endblock %}

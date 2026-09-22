@@ -9,6 +9,7 @@ import numpy as np
 from datetime import datetime, timedelta
 import os
 import json
+import threading
 from bybit_client import BybitTrader
 from config import PORTFOLIO, TECH_PARAMS, LOG_FLAGS
 
@@ -24,6 +25,23 @@ class DataLoader:
             "data", "historical"
         )
         os.makedirs(self.data_dir, exist_ok=True)
+
+        # FIX: несколько потоков бота (monitor_positions, monitor_shorts,
+        # analyze_markets) читают/пишут кэш одной и той же монеты параллельно.
+        # На Windows os.replace() (наша атомарная запись) отказывает с
+        # WinError 5 "Отказано в доступе", если файл в этот момент открыт
+        # другим потоком — реальный инцидент 22.09: 464 таких ошибки за ночь.
+        # POSIX (Linux/Mac) такого не запрещает, поэтому в тестах это не
+        # всплывало. Лечится сериализацией доступа к файлу одной монеты.
+        self._locks_meta   = threading.Lock()
+        self._symbol_locks: dict = {}
+
+    def _lock_for(self, symbol: str) -> threading.Lock:
+        """Возвращает (создавая при первом обращении) Lock для конкретной монеты."""
+        with self._locks_meta:
+            if symbol not in self._symbol_locks:
+                self._symbol_locks[symbol] = threading.Lock()
+            return self._symbol_locks[symbol]
 
     # ── Информация об инструментах ────────────────────────────────────────────
 
@@ -64,6 +82,11 @@ class DataLoader:
     # ── Исторические свечи ────────────────────────────────────────────────────
 
     def load_historical_data(self, symbol: str, days: int = 30) -> pd.DataFrame:
+        """Публичная обёртка: сериализует доступ к кэшу монеты (см. _lock_for)."""
+        with self._lock_for(symbol):
+            return self._load_historical_data_impl(symbol, days)
+
+    def _load_historical_data_impl(self, symbol: str, days: int = 30) -> pd.DataFrame:
         """
         Загрузка исторических данных.
         - При первом запуске грузит максимум доступного (до MAX_DAYS дней)
@@ -163,12 +186,43 @@ class DataLoader:
         return df
 
     def update_realtime(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Инкрементальное обновление — только новые свечи с последней записи."""
+        """Публичная обёртка: сериализует доступ к кэшу монеты (см. _lock_for)."""
+        with self._lock_for(symbol):
+            return self._update_realtime_impl(symbol)
+
+    def _update_realtime_impl(self, symbol: str) -> Optional[pd.DataFrame]:
+        """
+        Инкрементальное обновление — только новые свечи с последней записи.
+
+        ВАЖНО: все переходы на полную перезагрузку здесь вызывают
+        _load_historical_data_impl() напрямую (БЕЗ лока) — публичный
+        update_realtime() уже держит лок этой монеты, повторный self.load_
+        historical_data() (публичный, тоже берущий лок) вызвал бы дедлок
+        (Lock не реентерабелен).
+        """
         cache_file = os.path.join(self.data_dir, f"{symbol}_30d.csv")
         if not os.path.exists(cache_file):
-            return self.load_historical_data(symbol)
+            return self._load_historical_data_impl(symbol)
+
+        # FIX: тот же guard, что уже есть в load_historical_data() — здесь его
+        # не было, поэтому пустой/повреждённый кэш (0 байт после прерванной
+        # записи) вызывал одну и ту же ошибку на КАЖДОМ цикле подряд, вместо
+        # того чтобы один раз удалить битый файл и перезагрузиться заново.
+        if os.path.getsize(cache_file) == 0:
+            print(f"  ⚠️ update_realtime {symbol}: кэш пустой (0 байт) — удаляем, перезагружаем")
+            try:
+                os.remove(cache_file)
+            except Exception:
+                pass
+            return self._load_historical_data_impl(symbol)
+
         try:
-            df         = pd.read_csv(cache_file, parse_dates=['timestamp'])
+            df = pd.read_csv(cache_file, parse_dates=['timestamp'])
+            if df.empty or 'timestamp' not in df.columns:
+                print(f"  ⚠️ update_realtime {symbol}: кэш повреждён — удаляем, перезагружаем")
+                os.remove(cache_file)
+                return self._load_historical_data_impl(symbol)
+
             last_ts_ms = int(df['timestamp'].max().timestamp() * 1000)
             new_klines = self._fetch_klines_since(symbol, last_ts_ms)
             if new_klines:
@@ -179,8 +233,12 @@ class DataLoader:
                 self._safe_save(df, cache_file)
             return df
         except Exception as e:
-            print(f"  ⚠️ update_realtime {symbol}: {e}")
-            return None
+            print(f"  ⚠️ update_realtime {symbol}: {e} — удаляем повреждённый кэш, перезагружаем")
+            try:
+                os.remove(cache_file)
+            except Exception:
+                pass
+            return self._load_historical_data_impl(symbol)
 
     def load_all_data(self, symbols: list) -> tuple:
         """Загружает данные и инструменты для всех пар."""
@@ -260,11 +318,35 @@ class DataLoader:
         return df[df['timestamp'] > cutoff].reset_index(drop=True)
 
     def _safe_save(self, df: pd.DataFrame, path: str):
-        """Сохраняет DataFrame в CSV только если он не пустой."""
+        """
+        Сохраняет DataFrame в CSV только если он не пустой.
+
+        FIX: пишем в ВРЕМЕННЫЙ файл и переименовываем через os.replace() —
+        это атомарная операция и на Windows, и на Linux (в пределах одной
+        файловой системы): итоговый файл либо старый целиком, либо новый
+        целиком, никогда не 0-байтный "огрызок" от прерванной записи.
+        Реальный инцидент: to_csv() прерывался на середине (антивирус,
+        закрытие процесса), из-за чего кэш становился пустым файлом, и
+        update_realtime() потом падал с "No columns to parse from file"
+        на каждом цикле подряд.
+        """
         if df is None or df.empty:
             print(f"  ⚠️ Пустой DataFrame — файл {os.path.basename(path)} не перезаписан")
             return
-        df.to_csv(path, index=False)
+        # Уникальное имя (PID + ID потока) — защита belt-and-suspenders поверх
+        # блокировки по монете: даже если какой-то путь вызова её обойдёт,
+        # два потока не будут писать в один и тот же .tmp одновременно.
+        tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            df.to_csv(tmp_path, index=False)
+            os.replace(tmp_path, path)
+        except Exception as e:
+            print(f"  ⚠️ Ошибка атомарного сохранения {os.path.basename(path)}: {e}")
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
 
     def _get_default_info(self) -> dict:
         return {

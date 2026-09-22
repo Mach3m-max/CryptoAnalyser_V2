@@ -35,6 +35,7 @@
 
 import os
 import math
+from decimal import Decimal
 import time
 import json as _json
 from datetime import datetime
@@ -138,6 +139,7 @@ class OrderExecutor:
                     order_type="Market",
                     qty=usdt_amount_str,
                     market_unit="quoteCoin",
+                    is_leverage=0,   # FIX: запрет займа — только собственные средства
                 )
 
                 if buy_result.get("retCode") != 0:
@@ -191,49 +193,102 @@ class OrderExecutor:
                     actual_qty = qty_rounded
                 print(f"   Итоговое qty для TP/SL: {actual_qty} {coin}")
 
-                # ── TP: лимитный ордер ПЕРВЫМ ─────────────────────────────
-                # ВАЖНО: TP до SL — лимитный резервирует монеты.
-                # Если сначала SL (StopOrder), он тоже резервирует баланс
-                # и TP получит Insufficient balance.
-                tp_result = self.trader.place_order(
-                    category="spot",
-                    symbol=symbol,
-                    side="Sell",
-                    order_type="Limit",
-                    qty=str(actual_qty),
-                    price=str(tp_price),
-                    time_in_force="GTC",
-                )
-                tp_ok = tp_result.get("retCode") == 0
-                print(f"   TP {tp_price}: {'✅ ID=' + tp_result['result'].get('orderId','') if tp_ok else '❌ ' + tp_result.get('retMsg','')}")
-                if not tp_ok:
-                    print(f"   ⚠️ TP не выставлен — SL будет отменён при закрытии позиции")
+                # ── TP+SL: OCO для REAL, раздельная схема для DEMO ────────
+                # КОРНЕВАЯ ПРИЧИНА БАГА (найдено 22.09 по Order History Bybit,
+                # подтверждено только для REAL): раздельные TP (Limit) + SL
+                # (StopOrder) оба резервируют ПОЛНЫЙ баланс монеты. Биржа
+                # синхронно принимает ОБА запроса (retCode=0, оба ID выданы —
+                # в консоли видно "✅"), но SL после этого получает статус
+                # REJECTED уже асинхронно, без единой ошибки в ответе API.
+                # Подтверждено на реальных INJUSDT и SUIUSDT.
+                #
+                # НА DEMO OCO исторически не работает (или работает только
+                # через костыли) — раздельная схема была введена именно из-за
+                # этого и на DEMO проблемы REAL не воспроизводит. Поэтому
+                # ветвим по self.real_mode, а не меняем поведение полностью.
+                if self.real_mode:
+                    oco_result = self.trader._request("POST", "/v5/order/create", {
+                        "category":     "spot",
+                        "symbol":       symbol,
+                        "side":         "Sell",
+                        "orderType":    "Limit",
+                        "qty":          str(actual_qty),
+                        "price":        str(tp_price),
+                        "triggerPrice": str(sl_price),
+                        "timeInForce":  "GTC",
+                        "orderFilter":  "OcoOrder",
+                        "isLeverage":   0,   # запрет займа — только собственные средства
+                    })
+                    oco_ok = oco_result.get("retCode") == 0
+                    oco_id = oco_result.get("result", {}).get("orderId", "") if oco_ok else ""
+                    print(f"   OCO TP={tp_price} SL={sl_price}: "
+                          f"{'✅ ID=' + oco_id if oco_ok else '❌ ' + oco_result.get('retMsg', '')}")
 
-                # ── SL: StopOrder ВТОРЫМ ──────────────────────────────────
-                # StopOrder на Bybit Spot НЕ резервирует баланс до срабатывания
-                sl_result = self.trader._request("POST", "/v5/order/create", {
-                    "category":     "spot",
-                    "symbol":       symbol,
-                    "side":         "Sell",
-                    "orderType":    "Market",
-                    "qty":          str(actual_qty),
-                    "triggerPrice": str(sl_price),
-                    "triggerBy":    "LastPrice",
-                    "timeInForce":  "IOC",
-                    "orderFilter":  "StopOrder",
-                })
-                sl_ok = sl_result.get("retCode") == 0
-                print(f"   SL {sl_price}: {'✅ ID=' + sl_result.get('result',{}).get('orderId','') if sl_ok else '❌ ' + sl_result.get('retMsg','')}")
+                    if oco_ok:
+                        # Один ордер закрывает обе роли — под одним ID для
+                        # совместимости с существующим кодом отмены/детекции.
+                        tp_id = sl_id = oco_id
+                        self.open_order_ids[symbol] = {"tp": tp_id, "sl": sl_id}
+                        self._save_order_ids()
+                        print(f"   📌 Сохранён OCO ID: {oco_id[:8] if oco_id else '—'}...")
+                    else:
+                        # Fallback на раздельную схему НЕ делаем — на REAL именно
+                        # она вызывала потерю SL. Если OCO не удался, лучше явно
+                        # продать позицию, чем оставить её без защиты молча.
+                        print(f"   🚨 OCO не удался — позиция БЕЗ ЗАЩИТЫ, закрываем немедленно")
+                        self.trader._request("POST", "/v5/order/create", {
+                            "category": "spot", "symbol": symbol, "side": "Sell",
+                            "orderType": "Market", "qty": str(actual_qty),
+                        })
+                        self.open_order_ids.pop(symbol, None)
+                        self._save_order_ids()
+                        return False
+                else:
+                    # ── DEMO: раздельная схема (OCO здесь ненадёжен) ────────
+                    # ВАЖНО: TP до SL — лимитный резервирует монеты. Если
+                    # сначала SL (StopOrder), он тоже резервирует баланс и
+                    # TP получит Insufficient balance. На DEMO это работает
+                    # штатно — проблема REJECTED воспроизводилась только на REAL.
+                    tp_result = self.trader.place_order(
+                        category="spot",
+                        symbol=symbol,
+                        side="Sell",
+                        order_type="Limit",
+                        qty=str(actual_qty),
+                        price=str(tp_price),
+                        time_in_force="GTC",
+                        is_leverage=0,
+                    )
+                    tp_ok = tp_result.get("retCode") == 0
+                    print(f"   TP {tp_price}: {'✅ ID=' + tp_result['result'].get('orderId','') if tp_ok else '❌ ' + tp_result.get('retMsg','')}")
+                    if not tp_ok:
+                        print(f"   ⚠️ TP не выставлен — SL будет отменён при закрытии позиции")
 
-                tp_id = tp_result["result"].get("orderId", "") if tp_ok else ""
-                sl_id = sl_result.get("result", {}).get("orderId", "") if sl_ok else ""
-                self.open_order_ids[symbol] = {"tp": tp_id, "sl": sl_id}
-                self._save_order_ids()
-                print(f"   📌 Сохранены ID: TP={tp_id[:8] if tp_id else '—'}... SL={sl_id[:8] if sl_id else '—'}...")
+                    sl_result = self.trader._request("POST", "/v5/order/create", {
+                        "category":     "spot",
+                        "symbol":       symbol,
+                        "side":         "Sell",
+                        "orderType":    "Market",
+                        "qty":          str(actual_qty),
+                        "triggerPrice": str(sl_price),
+                        "triggerBy":    "LastPrice",
+                        "timeInForce":  "IOC",
+                        "orderFilter":  "StopOrder",
+                        "isLeverage":   0,
+                    })
+                    sl_ok = sl_result.get("retCode") == 0
+                    print(f"   SL {sl_price}: {'✅ ID=' + sl_result.get('result',{}).get('orderId','') if sl_ok else '❌ ' + sl_result.get('retMsg','')}")
+
+                    tp_id = tp_result["result"].get("orderId", "") if tp_ok else ""
+                    sl_id = sl_result.get("result", {}).get("orderId", "") if sl_ok else ""
+                    self.open_order_ids[symbol] = {"tp": tp_id, "sl": sl_id}
+                    self._save_order_ids()
+                    print(f"   📌 Сохранены ID: TP={tp_id[:8] if tp_id else '—'}... SL={sl_id[:8] if sl_id else '—'}...")
 
             else:
                 # SELL — отмена TP/SL → рыночная продажа
                 self._cancel_tp_sl(symbol)
+
 
                 coin    = symbol.replace("USDT", "")
                 balance = self.trader.get_coin_balance(coin)
@@ -255,6 +310,7 @@ class OrderExecutor:
                     order_type="Market",
                     qty=str(sell_qty),
                     market_unit="baseCoin",
+                    is_leverage=0,   # FIX: запрет займа — только собственные средства
                 )
 
                 if sell_result.get("retCode") != 0:
@@ -365,15 +421,21 @@ class OrderExecutor:
     def _cancel_tp_sl(self, symbol: str):
         """
         Отменяем все висящие ордера по символу (TP + SL).
-        Verbatim из main.py v1. НЕ ИЗМЕНЯТЬ.
+
+        FIX: с переходом на единый OCO-ордер (см. place_order) tp_id и sl_id —
+        один и тот же ID, и фильтры "Order"/"StopOrder" для него не подходят —
+        нужен "OcoOrder". Определяем это по совпадению id и меняем фильтр.
         """
         ids       = self.open_order_ids.pop(symbol, {})
         cancelled = []
+        is_oco    = bool(ids.get("tp")) and ids.get("tp") == ids.get("sl")
 
+        seen_ids = set()
         for label, oid in ids.items():
-            if not oid:
+            if not oid or oid in seen_ids:
                 continue
-            order_filter = "StopOrder" if label == "sl" else "Order"
+            seen_ids.add(oid)
+            order_filter = "OcoOrder" if is_oco else ("StopOrder" if label == "sl" else "Order")
             r = self.trader._request("POST", "/v5/order/cancel", {
                 "category":    "spot",
                 "symbol":      symbol,
@@ -381,13 +443,13 @@ class OrderExecutor:
                 "orderFilter": order_filter,
             })
             if r.get("retCode") in (0, 110001):
-                cancelled.append(f"{label.upper()} {oid[:8]}")
+                cancelled.append(f"{'OCO' if is_oco else label.upper()} {oid[:8]}")
             else:
                 print(f"   ⚠️ Не удалось отменить {label.upper()}: {r.get('retMsg')}")
 
-        # Страховка — cancel-all гарантирует отсутствие SL-зомби
+        # Страховка — cancel-all гарантирует отсутствие SL-зомби (включая OCO)
         try:
-            for order_filter in ("Order", "StopOrder"):
+            for order_filter in ("Order", "StopOrder", "OcoOrder"):
                 r = self.trader._request("POST", "/v5/order/cancel-all", {
                     "category":    "spot",
                     "symbol":      symbol,
@@ -426,8 +488,18 @@ class OrderExecutor:
         return 0.0
 
     def _detect_close_reason(self, symbol: str, tp_id: str, sl_id: str) -> str:
-        """Определяем что сработало — TP или SL."""
+        """
+        Определяем что сработало — TP или SL.
+
+        FIX: с переходом на единый OCO-ордер (см. place_order) tp_id и sl_id —
+        один и тот же ID. Старые фильтры "Order"/"StopOrder" для OCO-ордера
+        ничего не находят — нужен "OcoOrder". Раз ID общий, TP или SL
+        определяем по тому, к какой цене (price/triggerPrice ордера) ближе
+        фактическая avgPrice исполнения.
+        """
         try:
+            # Старый путь — на случай если где-то ещё остались раздельные TP/SL
+            # (например, позиции, открытые до этого фикса).
             for label, oid, flt in [("TP", tp_id, "Order"),
                                      ("SL", sl_id, "StopOrder")]:
                 if not oid:
@@ -443,6 +515,30 @@ class OrderExecutor:
                     lst = r.get("result", {}).get("list", [])
                     if lst and lst[0].get("orderStatus") == "Filled":
                         return f"{label} сработал"
+
+            # Новый путь — единый OCO-ордер
+            oid = tp_id or sl_id
+            if oid:
+                r = self.trader._request("GET", "/v5/order/history", {
+                    "category":    "spot",
+                    "symbol":      symbol,
+                    "orderId":     oid,
+                    "orderFilter": "OcoOrder",
+                    "limit":       1,
+                })
+                if r.get("retCode") == 0:
+                    lst = r.get("result", {}).get("list", [])
+                    if lst and lst[0].get("orderStatus") == "Filled":
+                        info      = lst[0]
+                        avg_price = float(info.get("avgPrice") or 0)
+                        tp_price  = float(info.get("price") or 0)
+                        sl_price  = float(info.get("triggerPrice") or 0)
+                        if avg_price > 0 and tp_price > 0 and sl_price > 0:
+                            # К какой из двух цен фактическое исполнение ближе
+                            if abs(avg_price - tp_price) <= abs(avg_price - sl_price):
+                                return "TP сработал"
+                            return "SL сработал"
+                        return "OCO сработал"
         except Exception:
             pass
         return "причина неизвестна"
@@ -469,7 +565,7 @@ class OrderExecutor:
         })
 
         step    = float(instr.get('qty_step', 0.001))
-        qty_dec = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
+        qty_dec = abs(Decimal(str(step)).as_tuple().exponent)
         sl_qty  = round(math.floor(qty / step) * step, qty_dec) if step > 0 else qty
 
         r = self.trader._request("POST", "/v5/order/create", {
@@ -482,6 +578,7 @@ class OrderExecutor:
             "triggerBy":    "LastPrice",
             "timeInForce":  "IOC",
             "orderFilter":  "StopOrder",
+            "isLeverage":   0,   # FIX: запрет займа — только собственные средства
         })
 
         if r.get("retCode") == 0:
@@ -499,6 +596,88 @@ class OrderExecutor:
     # ─────────────────────────────────────────────────────────────────────────
     # Персистентность order IDs (verbatim из main.py v1)
     # ─────────────────────────────────────────────────────────────────────────
+
+    def attach_protection(self, symbol: str, tp_percent: float, sl_percent: float,
+                          entry_override: float = None) -> dict:
+        """
+        Навешивает TP/SL на УЖЕ СУЩЕСТВУЮЩИЙ баланс монеты (без покупки).
+        Используется авто-починкой несоответствий для "голых" активов —
+        баланс есть, но нет ни TP/SL, ни отслеживаемой позиции.
+
+        entry_override — реальная цена входа из истории исполнений, если её
+        удалось найти (см. check_discrepancies). Если None — используем
+        текущую рыночную цену как условную точку отсчёта (лучшее, что можно
+        сделать без истории сделок).
+
+        Возвращает {'success': bool, 'qty': float, 'entry': float,
+                     'tp_price': float, 'sl_price': float, 'error': str}
+        """
+        try:
+            current_price = self.current_data.get('prices', {}).get(symbol, 0)
+            if current_price <= 0:
+                current_price = self.trader.get_price(symbol, "spot")
+            if current_price <= 0:
+                return {'success': False, 'error': 'Не удалось получить текущую цену'}
+
+            entry_for_tpsl = entry_override if entry_override and entry_override > 0 else current_price
+
+            coin = symbol.replace("USDT", "")
+            balance = self.get_coin_balance(coin)
+            usdt_value_estimate = balance * current_price
+
+            params = self._calc_order_params(symbol, "Sell", usdt_value_estimate)
+            if params is None:
+                return {'success': False, 'error': 'Не удалось рассчитать параметры ордера (баланс/минимумы)'}
+
+            qty      = params['qty']
+            tick_dec = params['tick_dec']
+
+            tp_price = round(entry_for_tpsl * (1 + tp_percent / 100), tick_dec)
+            sl_price = round(entry_for_tpsl * (1 - sl_percent / 100), tick_dec)
+
+            # Защита: если реальная точка входа сильно ниже текущей цены (позиция
+            # уже давно в плюсе к моменту авто-починки), TP от старого входа может
+            # оказаться НИЖЕ текущей цены — лимитник исполнится мгновенно как
+            # незапланированная продажа. В этом случае считаем TP/SL от текущей цены.
+            if tp_price <= current_price:
+                print(f"   ⚠️ TP от реальной точки входа ({entry_for_tpsl}) ниже текущей цены "
+                      f"({current_price}) — считаем TP/SL от текущей цены вместо этого")
+                entry_for_tpsl = current_price
+                tp_price = round(current_price * (1 + tp_percent / 100), tick_dec)
+                sl_price = round(current_price * (1 - sl_percent / 100), tick_dec)
+
+            print(f"   🔧 Навешиваем защиту {symbol}: qty={qty}  entry≈{entry_for_tpsl}  TP={tp_price}  SL={sl_price}")
+
+            tp_result = self.trader.place_order(
+                category="spot", symbol=symbol, side="Sell", order_type="Limit",
+                qty=str(qty), price=str(tp_price), time_in_force="GTC", is_leverage=0,
+            )
+            tp_ok = tp_result.get("retCode") == 0
+            if not tp_ok:
+                return {'success': False, 'error': f"TP не выставлен: {tp_result.get('retMsg')}"}
+
+            sl_result = self.trader._request("POST", "/v5/order/create", {
+                "category": "spot", "symbol": symbol, "side": "Sell",
+                "orderType": "Market", "qty": str(qty),
+                "triggerPrice": str(sl_price), "triggerBy": "LastPrice",
+                "timeInForce": "IOC", "orderFilter": "StopOrder", "isLeverage": 0,
+            })
+            sl_ok = sl_result.get("retCode") == 0
+            if not sl_ok:
+                print(f"   ⚠️ SL не выставлен: {sl_result.get('retMsg')} — TP всё равно активен")
+
+            tp_id = tp_result["result"].get("orderId", "") if tp_ok else ""
+            sl_id = sl_result.get("result", {}).get("orderId", "") if sl_ok else ""
+            self.open_order_ids[symbol] = {"tp": tp_id, "sl": sl_id}
+            self._save_order_ids()
+
+            return {
+                'success': True, 'qty': qty, 'entry': entry_for_tpsl,
+                'tp_price': tp_price, 'sl_price': sl_price,
+                'usdt_amount': usdt_value_estimate,
+            }
+        except Exception as e:
+            return {'success': False, 'error': str(e)}
 
     def _order_ids_path(self) -> str:
         """Путь к файлу order_ids — отдельный для DEMO и REAL."""

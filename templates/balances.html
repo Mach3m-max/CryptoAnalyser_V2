@@ -15,19 +15,138 @@
     <div class="card">
       <div class="card-title">Доступно</div>
       <div style="font-size:32px;font-weight:700;font-family:var(--mono);color:var(--green)"
-           id="free-usdt">—</div>
+           id="free-usdt">{{ '%.2f'|format(free_usdt) if free_usdt is defined and free_usdt else '—' }}</div>
       <div class="muted" style="font-size:12px;margin-top:4px">Свободный USDT</div>
     </div>
   </div>
 
+  <!-- Активные займы (Spot Margin) -->
+  {% if loans %}
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title" style="color:var(--red)">⚠️ Активные займы (Spot Margin)</div>
+    <table>
+      <thead><tr><th>Монета</th><th>Сумма займа</th><th></th></tr></thead>
+      <tbody>
+      {% for loan in loans %}
+        <tr id="loan-row-{{ loan.coin }}">
+          <td style="font-weight:600">
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ loan.coin }}/USDT"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ loan.coin }}
+            </a>
+          </td>
+          <td class="mono red">{{ '%.8f'|format(loan.amount) }}</td>
+          <td>
+            <button class="btn btn-red" style="padding:4px 12px"
+                    onclick="repayLoan('{{ loan.coin }}', '{{ '%.8f'|format(loan.amount) }}')">Погасить</button>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <!-- Обнаруженные несоответствия (read-only сверка, без авто-починки) -->
+  {% if discrepancies %}
+    {% if discrepancies.error %}
+    <div class="card" style="margin-bottom:16px;border-color:rgba(210,153,34,.4)">
+      <div class="card-title" style="color:var(--yellow)">⚠️ Не удалось проверить несоответствия</div>
+      <div class="muted" style="font-size:12px">{{ discrepancies.error }}</div>
+    </div>
+    {% elif discrepancies.orphan_assets or discrepancies.orphan_orders %}
+    <div class="card" style="margin-bottom:16px;border-color:rgba(210,153,34,.4)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="card-title" style="color:var(--yellow);margin-bottom:0">
+          ⚠️ Обнаружены несоответствия
+        </div>
+        <button class="btn" style="padding:6px 14px;background:var(--yellow);color:#000;font-size:12px"
+                onclick="autoFixDiscrepancies()">
+          🔧 Исправить автоматически
+        </button>
+      </div>
+      <div class="muted" style="font-size:11px;margin-bottom:12px">
+        Голые LONG-активы получат TP/SL по умолчанию для пары; ордера-сироты будут отменены.
+        SHORT-активы не трогаются автоматически — там займ, риск дороже, чем ручная проверка.
+      </div>
+
+      {% if discrepancies.orphan_assets %}
+      <div style="margin-bottom:14px">
+        <div class="muted" style="font-size:11px;text-transform:uppercase;margin-bottom:6px">
+          Активы без обвязки (нет TP/SL или бот не считает их своими)
+        </div>
+        <table>
+          <thead><tr><th>Пара</th><th>Направление</th><th>Баланс</th><th>≈USD</th><th>Точка входа</th><th>Есть открытый ордер</th></tr></thead>
+          <tbody>
+          {% for a in discrepancies.orphan_assets %}
+            <tr>
+              <td>
+                <a href="https://www.bybit.com/ru-RU/trade/spot/{{ a.symbol.replace('USDT','/USDT') }}"
+                   target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+                  {{ a.symbol }}
+                </a>
+              </td>
+              <td class="{{ 'green' if a.direction == 'LONG' else 'red' }}">
+                {{ '▲ LONG' if a.direction == 'LONG' else '▼ SHORT' }}
+              </td>
+              <td class="mono">{{ a.balance }}</td>
+              <td class="mono">{{ '%.2f'|format(a.usd_value) }}</td>
+              <td class="mono muted" style="font-size:12px">
+                {{ a.entry_price if a.entry_price else 'не найдена' }}
+              </td>
+              <td class="{{ 'green' if a.has_open_order else 'red' }}" style="font-size:12px">
+                {{ 'да' if a.has_open_order else 'НЕТ — без защиты' }}
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      {% if discrepancies.orphan_orders %}
+      <div>
+        <div class="muted" style="font-size:11px;text-transform:uppercase;margin-bottom:6px">
+          Ордера-сироты (открыты, но пара не считается позицией бота — будут отменены при авто-починке)
+        </div>
+        <table>
+          <thead><tr><th>Пара</th><th>Сторона</th><th>Тип</th><th>Кол-во</th><th>Цена</th><th>Order ID</th></tr></thead>
+          <tbody>
+          {% for o in discrepancies.orphan_orders %}
+            <tr>
+              <td>
+                <a href="https://www.bybit.com/ru-RU/trade/spot/{{ o.symbol.replace('USDT','/USDT') }}"
+                   target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+                  {{ o.symbol }}
+                </a>
+              </td>
+              <td class="{{ 'green' if o.side == 'Buy' else 'red' }}">{{ o.side }}</td>
+              <td class="muted" style="font-size:12px">{{ o.order_type }}</td>
+              <td class="mono">{{ o.qty }}</td>
+              <td class="mono">{{ o.price }}</td>
+              <td class="mono muted" style="font-size:11px">{{ o.order_id }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  {% endif %}
+
+  <div id="autofix-log" style="display:none;margin-bottom:16px;background:rgba(0,0,0,.05);border-radius:4px;padding:8px;font-size:11px;font-family:var(--mono);white-space:pre-wrap;word-break:break-all;color:var(--muted)"></div>
+
+
   <!-- Open positions value breakdown -->
   {% set positions = data.portfolio.get('open_positions', {}) %}
-  {% if positions %}
+  {% set shorts     = data.get('short_positions', {}) %}
+  {% if positions or shorts %}
   <div class="card">
     <div class="card-title">В открытых позициях</div>
     <table>
       <thead><tr>
-        <th>Инструмент</th><th>Сумма входа</th><th>Текущая цена</th><th>Оценка</th><th>PnL</th>
+        <th>Инструмент</th><th>Направление</th><th>Сумма входа</th><th>Текущая цена</th><th>Оценка</th><th>PnL</th>
       </tr></thead>
       <tbody>
       {% for sym, pos in positions.items() %}
@@ -37,7 +156,35 @@
         {% set pnl_pct  = ((cur - entry) / entry * 100) if entry > 0 else 0 %}
         {% set cur_val  = usdt * (1 + pnl_pct/100) if entry > 0 else usdt %}
         <tr>
-          <td style="font-weight:600">{{ sym }}</td>
+          <td style="font-weight:600">
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ sym.replace('USDT','/USDT') }}"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ sym }}
+            </a>
+          </td>
+          <td><span style="color:var(--green);font-size:11px;font-weight:600">▲ LONG</span></td>
+          <td class="mono muted">{{ '%.2f'|format(usdt) }}</td>
+          <td class="mono">{{ '%.4f'|format(cur) if cur else '—' }}</td>
+          <td class="mono">{{ '%.2f'|format(cur_val) if entry > 0 else '—' }}</td>
+          <td class="mono {{ 'green' if pnl_pct > 0 else 'red' if pnl_pct < 0 else 'muted' }}">
+            {{ '%+.2f%%'|format(pnl_pct) if entry > 0 else '—' }}
+          </td>
+        </tr>
+      {% endfor %}
+      {% for sym, pos in shorts.items() %}
+        {% set entry = pos.entry|float %}
+        {% set cur   = data.prices.get(sym, 0)|float %}
+        {% set usdt  = pos.usdt_amt|float %}
+        {% set pnl_pct  = ((entry - cur) / entry * 100) if entry > 0 else 0 %}
+        {% set cur_val  = usdt * (1 + pnl_pct/100) if entry > 0 else usdt %}
+        <tr style="background:rgba(248,81,73,.03)">
+          <td style="font-weight:600">
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ sym.replace('USDT','/USDT') }}"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ sym }}
+            </a>
+          </td>
+          <td><span style="color:var(--red);font-size:11px;font-weight:600">▼ SHORT</span></td>
           <td class="mono muted">{{ '%.2f'|format(usdt) }}</td>
           <td class="mono">{{ '%.4f'|format(cur) if cur else '—' }}</td>
           <td class="mono">{{ '%.2f'|format(cur_val) if entry > 0 else '—' }}</td>
@@ -50,10 +197,117 @@
     </table>
   </div>
   {% endif %}
+
+  <!-- Тестовое погашение (для отладки) -->
+  <div class="card" style="margin-top:24px;border-color:rgba(135,206,250,.3);background:rgba(135,206,250,.02)">
+    <div class="card-title" style="color:var(--blue)">🧪 Тестовое погашение займа (отладка)</div>
+    <div class="muted" style="font-size:12px;margin-bottom:12px">
+      Берёт займ TIA на 15 USDT и гасит весь займ с подробным логированием каждого шага.
+      Используйте для отладки механизма погашения.
+    </div>
+    <button class="btn" style="padding:8px 16px;background:var(--blue);color:#fff"
+            onclick="runTestRepay()">
+      ▶️ Запустить тест
+    </button>
+    <div id="test-log" style="margin-top:12px;display:none;background:rgba(0,0,0,.05);border-radius:4px;padding:8px;font-size:11px;font-family:var(--mono);max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;color:var(--muted)"></div>
+  </div>
+
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
+function repayLoan(coin, amount) {
+  if(!confirm('Погасить займ по ' + coin + ' на сумму ' + amount + '?')) return;
+  fetch('/api/repay_loan', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({coin: coin, amount: amount})
+  })
+  .then(r => r.json())
+  .then(d => {
+    toast(d.success ? '✅ ' + d.message : '❌ ' + d.error, d.success);
+    if(d.success) {
+      const row = document.getElementById('loan-row-' + coin);
+      if(row) row.remove();
+    }
+  })
+  .catch(e => toast('❌ Ошибка запроса: ' + e, false));
+}
+
+function autoFixDiscrepancies() {
+  if(!confirm('Навесить TP/SL на голые LONG-активы и отменить ордера-сироты?\n\nSHORT-активы затронуты не будут.')) return;
+  
+  const logDiv = document.getElementById('autofix-log');
+  logDiv.style.display = 'block';
+  logDiv.textContent = '⏳ Выполняем...';
+  
+  fetch('/api/auto_fix_discrepancies', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  })
+  .then(r => r.json())
+  .then(d => {
+    if(!d.success) {
+      logDiv.textContent = '❌ Ошибка: ' + d.error;
+      toast('❌ ' + d.error, false);
+      return;
+    }
+    const rep = d.report;
+    let lines = [];
+    if(rep.fixed_assets.length) {
+      lines.push('✅ Защищены активы:');
+      rep.fixed_assets.forEach(a => lines.push(`   ${a.symbol}: qty=${a.qty} entry≈${a.entry} TP=${a.tp_price} SL=${a.sl_price}`));
+    }
+    if(rep.cancelled_orders.length) {
+      lines.push('✅ Отменены ордера-сироты:');
+      rep.cancelled_orders.forEach(o => lines.push(`   ${o.symbol}: ${o.order_id}`));
+    }
+    if(rep.skipped.length) {
+      lines.push('⏭️ Пропущено (нужен ручной разбор):');
+      rep.skipped.forEach(s => lines.push('   ' + s));
+    }
+    if(rep.errors.length) {
+      lines.push('❌ Ошибки:');
+      rep.errors.forEach(e => lines.push('   ' + e));
+    }
+    if(!lines.length) lines.push('Нечего исправлять — несоответствий не найдено.');
+    logDiv.textContent = lines.join('\n');
+    toast('✅ Готово, смотрите отчёт ниже', true);
+    setTimeout(() => location.reload(), 2500);
+  })
+  .catch(e => {
+    logDiv.textContent = '💥 Ошибка запроса: ' + e;
+    toast('❌ Ошибка: ' + e, false);
+  });
+}
+
+function runTestRepay() {
+  const logDiv = document.getElementById('test-log');
+  logDiv.style.display = 'block';
+  logDiv.textContent = '⏳ Запускаем тест...';
+  
+  fetch('/api/test_repay_clean', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({})
+  })
+  .then(r => r.json())
+  .then(d => {
+    const log = (d.log || []).join('\n');
+    logDiv.textContent = log;
+    if(d.success) {
+      toast('✅ Тест завершён', true);
+    } else {
+      toast('❌ Тест не прошёл: ' + (d.error || 'неизвестная ошибка'), false);
+    }
+  })
+  .catch(e => {
+    logDiv.textContent = '💥 Ошибка запроса: ' + e;
+    toast('❌ Ошибка: ' + e, false);
+  });
+}
+
 socket.on('update', d => {
   if(d.balances?.total_usdt)
     document.getElementById('total-usdt').textContent =

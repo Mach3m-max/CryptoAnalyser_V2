@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+{% block title %}Аналитика{% endblock %}
+
+{% block extra_head %}
+<style>
+  .filter-form { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 20px; }
+  .filter-form .field { min-width: 130px; }
+  .filter-form label { display: block; font-size: 11px; color: var(--muted);
+                        margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
+  .filter-form select, .filter-form input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 13px;
+  }
+  .filter-form .sep { color: var(--muted); font-size: 12px; padding-bottom: 9px; }
+  .filter-form button {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; height: 34px;
+  }
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+  .bar-track { background: rgba(255,255,255,.06); border-radius: 4px; height: 6px;
+               overflow: hidden; margin-top: 4px; }
+  .bar-fill  { height: 100%; border-radius: 4px; }
+  .warn-box { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.35);
+              border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+  <div class="page-title">Аналитика торговли</div>
+
+  <form class="filter-form" method="GET" action="/analytics">
+    <div class="field">
+      <label>Период</label>
+      <select name="days" onchange="this.form.from.value=''; this.form.to.value=''; this.form.submit()">
+        <option value="1"  {% if days == 1 %}selected{% endif %}>1 день</option>
+        <option value="3"  {% if days == 3 or not days %}selected{% endif %}>3 дня</option>
+        <option value="7"  {% if days == 7 %}selected{% endif %}>7 дней</option>
+        <option value="14" {% if days == 14 %}selected{% endif %}>14 дней</option>
+        <option value="30" {% if days == 30 %}selected{% endif %}>30 дней</option>
+      </select>
+    </div>
+    <div class="sep">или диапазон дат:</div>
+    <div class="field">
+      <label>С</label>
+      <input type="date" name="from" value="{{ from_str }}">
+    </div>
+    <div class="field">
+      <label>По</label>
+      <input type="date" name="to" value="{{ to_str }}">
+    </div>
+    <div class="field">
+      <label>Режим</label>
+      <select name="mode">
+        <option value=""     {% if not mode_filter %}selected{% endif %}>Все</option>
+        <option value="DEMO" {% if mode_filter == 'DEMO' %}selected{% endif %}>DEMO</option>
+        <option value="REAL" {% if mode_filter == 'REAL' %}selected{% endif %}>REAL</option>
+      </select>
+    </div>
+    <button type="submit">Применить</button>
+  </form>
+
+  {% if error %}
+  <div class="warn-box">
+    <b style="color:var(--red)">Ошибка построения отчёта:</b> {{ error }}
+  </div>
+  {% elif not report or report.summary.total == 0 %}
+  <div class="card" style="text-align:center;padding:48px;color:var(--muted)">
+    За выбранный период ({{ report.period_from if report else '' }} — {{ report.period_to if report else '' }})
+    закрытых сделок не найдено.
+  </div>
+  {% else %}
+
+  <div class="muted" style="font-size:12px;margin-bottom:16px">
+    Период: {{ report.period_from }} — {{ report.period_to }}
+    · Режим: {{ report.mode }}
+    · Всего событий в логе: {{ report.raw_trade_count }}, из них закрытий: {{ report.closed_trade_count }}
+  </div>
+
+  <!-- ── Общая сводка ─────────────────────────────────────────────────── -->
+  <div class="stat-row">
+    <div class="card" style="padding:14px 16px">
+      <div class="stat"><div class="stat-val">{{ report.summary.total }}</div>
+        <div class="stat-label">Сделок закрыто</div></div>
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div class="stat">
+        <div class="stat-val {{ 'green' if report.summary.win_rate >= 50 else 'red' }}">
+          {{ report.summary.win_rate }}%
+        </div>
+        <div class="stat-label">Win Rate ({{ report.summary.wins }}/{{ report.summary.total }})</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div class="stat">
+        <div class="stat-val {{ 'green' if report.summary.total_pnl_usdt >= 0 else 'red' }}">
+          {{ '%+.2f'|format(report.summary.total_pnl_usdt) }}
+        </div>
+        <div class="stat-label">Суммарный PnL, USDT</div>
+      </div>
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div class="stat">
+        <div class="stat-val {{ 'green' if report.summary.avg_pnl_pct >= 0 else 'red' }}">
+          {{ '%+.2f%%'|format(report.summary.avg_pnl_pct) }}
+        </div>
+        <div class="stat-label">Средний PnL за сделку</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Подозрительные кластеры (детектор дублей) ───────────────────── -->
+  {% if report.duplicate_clusters %}
+  <div class="warn-box">
+    <div style="font-weight:600;color:var(--red);margin-bottom:8px">
+      ⚠️ Подозрительные кластеры закрытий ({{ report.duplicate_clusters|length }})
+    </div>
+    <div class="muted" style="font-size:12px;margin-bottom:10px">
+      Несколько закрытий одной пары с одинаковой ценой входа и причиной в короткий
+      промежуток времени — типичная сигнатура известных багов (неполное закрытие,
+      рестарт-гонка). Не всегда баг, но всегда стоит перепроверить.
+    </div>
+    <table>
+      <thead><tr><th>Пара</th><th>Entry</th><th>Причина</th><th>Раз</th>
+        <th>С</th><th>По</th><th>Суммарный PnL</th></tr></thead>
+      <tbody>
+      {% for c in report.duplicate_clusters %}
+        <tr>
+          <td style="font-weight:600">{{ c.symbol }}</td>
+          <td class="mono">{{ c.entry_price }}</td>
+          <td>{{ c.close_reason }}</td>
+          <td class="mono">{{ c.count }}</td>
+          <td class="mono muted" style="font-size:11px">{{ c.first }}</td>
+          <td class="mono muted" style="font-size:11px">{{ c.last }}</td>
+          <td class="mono {{ 'green' if c.total_pnl_usdt >= 0 else 'red' }}">
+            {{ '%+.2f'|format(c.total_pnl_usdt) }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  <div class="grid2" style="margin-bottom:20px">
+    <!-- ── LONG vs SHORT ──────────────────────────────────────────────── -->
+    <div class="card">
+      <div class="card-title">Лонг vs Шорт</div>
+      <table>
+        <thead><tr><th>Направление</th><th>Сделок</th><th>Win Rate</th><th>PnL, USDT</th></tr></thead>
+        <tbody>
+        {% for dir in ('LONG', 'SHORT') %}
+          {% set s = report.by_direction.get(dir) %}
+          {% if s %}
+          <tr>
+            <td style="font-weight:600" class="{{ 'green' if dir=='LONG' else 'red' }}">
+              {{ '▲ LONG' if dir=='LONG' else '▼ SHORT' }}
+            </td>
+            <td class="mono">{{ s.total }}</td>
+            <td class="mono {{ 'green' if s.win_rate>=50 else 'red' }}">{{ s.win_rate }}%</td>
+            <td class="mono {{ 'green' if s.total_pnl_usdt>=0 else 'red' }}">
+              {{ '%+.2f'|format(s.total_pnl_usdt) }}
+            </td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- ── Калибровка confidence ──────────────────────────────────────── -->
+    <div class="card">
+      <div class="card-title">Уверенность модели vs реальный исход</div>
+      <table>
+        <thead><tr><th>Бакет</th><th>Сделок</th><th>Win Rate</th></tr></thead>
+        <tbody>
+        {% for b in report.by_confidence %}
+          <tr>
+            <td class="mono">{{ b.bucket }}</td>
+            <td class="mono muted">{{ b.total }}</td>
+            <td>
+              <div class="mono {{ 'green' if b.win_rate>=50 else 'red' if b.total else 'muted' }}">
+                {{ b.win_rate }}%
+              </div>
+              {% if b.total %}
+              <div class="bar-track">
+                <div class="bar-fill" style="width:{{ b.win_rate }}%;
+                     background:{{ 'var(--green)' if b.win_rate>=50 else 'var(--red)' }}"></div>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <div class="muted" style="font-size:11px;margin-top:8px">
+        Если win rate не растёт вместе с уверенностью — confidence модели
+        не несёт сигнала о реальном качестве прогноза.
+      </div>
+    </div>
+  </div>
+
+  <!-- ── По причине закрытия ──────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">По причине закрытия</div>
+    <table>
+      <thead><tr><th>Причина</th><th>Сделок</th><th>Win Rate</th><th>PnL, USDT</th></tr></thead>
+      <tbody>
+      {% for r in report.by_reason %}
+        <tr>
+          <td style="font-weight:600">{{ r.reason }}</td>
+          <td class="mono">{{ r.total }}</td>
+          <td class="mono {{ 'green' if r.win_rate>=50 else 'red' }}">{{ r.win_rate }}%</td>
+          <td class="mono {{ 'green' if r.total_pnl_usdt>=0 else 'red' }}">
+            {{ '%+.2f'|format(r.total_pnl_usdt) }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── По парам ──────────────────────────────────────────────────────── -->
+  <div class="card">
+    <div class="card-title">По парам</div>
+    <table>
+      <thead><tr><th>Пара</th><th>Сделок</th><th>Win Rate</th><th>PnL, USDT</th></tr></thead>
+      <tbody>
+      {% for p in report.by_pair %}
+        <tr>
+          <td>
+            <a href="https://www.bybit.com/ru-RU/trade/spot/{{ p.symbol.replace('USDT','/USDT') }}"
+               target="_blank" style="color:var(--blue);text-decoration:none;font-weight:600">
+              {{ p.symbol }}
+            </a>
+          </td>
+          <td class="mono">{{ p.total }}</td>
+          <td class="mono {{ 'green' if p.win_rate>=50 else 'red' }}">{{ p.win_rate }}%</td>
+          <td class="mono {{ 'green' if p.total_pnl_usdt>=0 else 'red' }}">
+            {{ '%+.2f'|format(p.total_pnl_usdt) }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ── RF vs XGB по парам ────────────────────────────────────────────── -->
+  {% if report.by_source %}
+  <div class="card">
+    <div class="card-title">Какая модель прибыльнее по факту (RF vs XGB)</div>
+    <table>
+      <thead><tr><th>Пара</th><th>Модель</th><th>Сделок</th><th>Win Rate</th><th>PnL, USDT</th></tr></thead>
+      <tbody>
+      {% for s in report.by_source %}
+        <tr>
+          <td>{{ s.symbol }}</td>
+          <td class="mono {{ 'blue' if s.source=='ml_xgb' else 'muted' }}">{{ s.source }}</td>
+          <td class="mono">{{ s.total }}</td>
+          <td class="mono {{ 'green' if s.win_rate>=50 else 'red' }}">{{ s.win_rate }}%</td>
+          <td class="mono {{ 'green' if s.total_pnl_usdt>=0 else 'red' }}">
+            {{ '%+.2f'|format(s.total_pnl_usdt) }}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% endif %}
+</div>
+{% endblock %}

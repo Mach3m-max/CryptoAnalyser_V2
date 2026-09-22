@@ -1,4 +1,3 @@
-from typing import Optional
 """
 download_history.py — Автономная загрузка исторических данных
 =============================================================
@@ -13,6 +12,7 @@ download_history.py — Автономная загрузка историчес
 """
 
 from __future__ import annotations
+from typing import Optional
 import argparse
 import os
 import sys

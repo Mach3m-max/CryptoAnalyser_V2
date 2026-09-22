@@ -18,6 +18,7 @@ import argparse
 import getpass
 import threading
 import logging
+from datetime import datetime
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, ROOT)
@@ -30,24 +31,87 @@ from config.app_config import (
 
 # ── Логирование в файл ────────────────────────────────────────────────────────
 
+class _DailyDatedFileHandler(logging.FileHandler):
+    """
+    FIX (ротация лог-файла): TimedRotatingFileHandler здесь не подходит —
+    ему передавали имя файла, где дата УЖЕ часть базового filename
+    (bot_REAL_2026-09-20.log). При ротации в полночь такой хендлер
+    переименовывает старый файл (добавляя СВОЙ суффикс поверх), но новые
+    записи продолжает писать в файл со СТАРЫМ именем — дата в названии
+    никогда не обновляется. Реальный инцидент: bot_REAL_2026-09-20.log
+    продолжал расти 21 сентября.
+
+    Этот хендлер проверяет текущую дату на каждой записи и сам открывает
+    новый файл с сегодняшней датой в имени, когда дата меняется.
+    """
+    def __init__(self, logs_dir: str, mode_str: str, encoding='utf-8'):
+        self._logs_dir = logs_dir
+        self._mode_str = mode_str
+        self._cur_date = datetime.now().strftime('%Y-%m-%d')
+        super().__init__(self._path_for(self._cur_date), mode='a',
+                         encoding=encoding, delay=False)
+
+    def _path_for(self, date_str: str) -> str:
+        return os.path.join(self._logs_dir, f"bot_{self._mode_str}_{date_str}.log")
+
+    def emit(self, record):
+        today = datetime.now().strftime('%Y-%m-%d')
+        if today != self._cur_date:
+            self._cur_date = today
+            if self.stream:
+                self.stream.close()
+                self.stream = None
+            self.baseFilename = self._path_for(today)
+            self.stream = self._open()
+        super().emit(record)
+
+
+def _cleanup_old_logs(logs_dir: str, mode_str: str, keep_days: int = 90):
+    """Удаляет лог-файлы старше keep_days дней (аналог backupCount у старого хендлера)."""
+    import glob
+    from datetime import timedelta
+    cutoff = datetime.now() - timedelta(days=keep_days)
+    pattern = os.path.join(logs_dir, f"bot_{mode_str}_*.log")
+    for path in glob.glob(pattern):
+        try:
+            fname = os.path.basename(path)
+            date_part = fname.replace(f"bot_{mode_str}_", "").replace(".log", "")
+            file_date = datetime.strptime(date_part, "%Y-%m-%d")
+            if file_date < cutoff:
+                os.remove(path)
+        except Exception:
+            continue  # имя не распарсилось — не трогаем файл
+
 def setup_file_logging(real_mode: bool):
-    """Пишет stdout в logs/bot_YYYY-MM-DD_HH-MM.log посуточно."""
-    from datetime import datetime
+    """
+    Пишет stdout в logs/bot_{DEMO|REAL}_YYYY-MM-DD.log — один файл на день,
+    рестарты в течение дня дописываются в конец того же файла (не плодят
+    отдельные файлы на каждый запуск). Ротация на новую дату — через
+    _DailyDatedFileHandler (см. выше, почему обычный TimedRotatingFileHandler
+    здесь не работал).
+    При каждом старте процесса в файл пишется отдельная шапка-разделитель,
+    чтобы визуально отличать один запуск от другого внутри дня.
+    """
+    mode_str = "REAL" if real_mode else "DEMO"
     logs_dir = os.path.join(ROOT, "logs")
     os.makedirs(logs_dir, exist_ok=True)
-    log_path = os.path.join(
-        logs_dir, f"bot_{datetime.now().strftime('%Y-%m-%d_%H-%M')}.log"
-    )
+
+    _cleanup_old_logs(logs_dir, mode_str, keep_days=90)
 
     fmt     = logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S")
-    handler = logging.handlers.TimedRotatingFileHandler(
-        log_path, when='midnight', backupCount=90, encoding='utf-8'
-    )
+    handler = _DailyDatedFileHandler(logs_dir, mode_str, encoding='utf-8')
     handler.setFormatter(fmt)
     root = logging.getLogger('bot_file')
     root.setLevel(logging.DEBUG)
     root.propagate = False
     root.addHandler(handler)
+
+    # ── Шапка-разделитель нового запуска (видно рестарты внутри одного файла) ──
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    root.info("")
+    root.info("═" * 70)
+    root.info(f"НОВЫЙ ЗАПУСК ({mode_str})  {now_str}")
+    root.info("═" * 70)
 
     class _Tee:
         def __init__(self, stream, logger):
@@ -69,8 +133,8 @@ def setup_file_logging(real_mode: bool):
             return False
 
     sys.stdout = _Tee(sys.__stdout__, root)
-    sys.__stdout__.write(f"📁 Лог: {log_path}\n")
-    return log_path
+    sys.__stdout__.write(f"📁 Лог: {handler.baseFilename}\n")
+    return handler.baseFilename
 
 
 # ── Получение API-ключей ──────────────────────────────────────────────────────

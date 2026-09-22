@@ -1,8 +1,75 @@
 {% extends "base.html" %}
 {% block title %}История{% endblock %}
+
+{% block extra_head %}
+<style>
+  .filter-form { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; margin-bottom: 20px; }
+  .filter-form .field { min-width: 130px; }
+  .filter-form label { display: block; font-size: 11px; color: var(--muted);
+                        margin-bottom: 4px; text-transform: uppercase; letter-spacing: .4px; }
+  .filter-form select, .filter-form input {
+    width: 100%; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 10px; color: var(--text); font-size: 13px;
+  }
+  .filter-form .sep { color: var(--muted); font-size: 12px; padding-bottom: 9px; }
+  .filter-form button {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; height: 34px;
+  }
+  .warn-box { background: rgba(248,81,73,.08); border: 1px solid rgba(248,81,73,.35);
+              border-radius: 8px; padding: 14px 16px; margin-bottom: 20px; }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="page">
   <div class="page-title">История сделок</div>
+
+  <form class="filter-form" method="GET" action="/history">
+    <div class="field">
+      <label>Период</label>
+      <select name="days" onchange="this.form.from.value=''; this.form.to.value=''; this.form.submit()">
+        <option value="1"  {% if days == 1 %}selected{% endif %}>1 день</option>
+        <option value="7"  {% if days == 7 %}selected{% endif %}>7 дней</option>
+        <option value="30" {% if days == 30 or not days %}selected{% endif %}>30 дней</option>
+        <option value="90" {% if days == 90 %}selected{% endif %}>90 дней</option>
+      </select>
+    </div>
+    <div class="sep">или диапазон дат:</div>
+    <div class="field">
+      <label>С</label>
+      <input type="date" name="from" value="{{ from_str }}">
+    </div>
+    <div class="field">
+      <label>По</label>
+      <input type="date" name="to" value="{{ to_str }}">
+    </div>
+    <div class="field">
+      <label>Режим</label>
+      <select name="mode">
+        <option value=""     {% if not mode_filter %}selected{% endif %}>Текущий ({{ data.mode }})</option>
+        <option value="DEMO" {% if mode_filter == 'DEMO' %}selected{% endif %}>DEMO</option>
+        <option value="REAL" {% if mode_filter == 'REAL' %}selected{% endif %}>REAL</option>
+        <option value="ALL"  {% if mode_filter == 'ALL' %}selected{% endif %}>Все</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Показать</label>
+      <select name="limit">
+        <option value="50"  {% if limit == 50 %}selected{% endif %}>50 сделок</option>
+        <option value="100" {% if limit == 100 %}selected{% endif %}>100 сделок</option>
+        <option value="200" {% if limit == 200 or not limit %}selected{% endif %}>200 сделок</option>
+        <option value="500" {% if limit == 500 %}selected{% endif %}>500 сделок</option>
+      </select>
+    </div>
+    <button type="submit">Применить</button>
+  </form>
+
+  {% if error %}
+  <div class="warn-box">
+    <b style="color:var(--red)">Ошибка загрузки истории:</b> {{ error }}
+  </div>
+  {% endif %}
 
   {% if trades %}
   <!-- Summary stats -->
@@ -34,14 +101,16 @@
   <div class="card" style="padding:0">
     <table>
       <thead><tr>
-        <th>Время закрытия</th><th>Пара</th><th>Тип</th>
+        <th>Время закрытия</th><th>Пара</th><th>Направление</th><th>Тип</th>
         <th>Вход</th><th>Выход</th><th>PnL %</th><th>PnL USDT</th><th>Режим</th>
       </tr></thead>
       <tbody>
       {% for t in trades %}
         {% set pnl = t.pnl_pct|default('')|string %}
         {% set pnl_f = pnl|float if pnl else 0 %}
-        {% set reason = t.close_reason|default(t.event_type|replace('POSITION_CLOSED_','')) %}
+        {% set raw_reason = t.close_reason|default(t.event_type|replace('POSITION_CLOSED_','')) %}
+        {% set is_short = 'SHORT' in raw_reason or 'SHORT' in t.event_type|default('') %}
+        {% set reason = raw_reason.replace('SHORT_', '') if is_short else raw_reason %}
         <tr style="
           {% if pnl_f > 0 %}background:rgba(63,185,80,.04)
           {% elif pnl_f < 0 %}background:rgba(248,81,73,.04)
@@ -54,6 +123,13 @@
             </a>
           </td>
           <td>
+            {% if is_short %}
+              <span style="color:var(--red);font-size:11px;font-weight:600">▼ SHORT</span>
+            {% else %}
+              <span style="color:var(--green);font-size:11px;font-weight:600">▲ LONG</span>
+            {% endif %}
+          </td>
+          <td>
             {% if reason in ('TP','POSITION_CLOSED_TP') %}
               <span style="color:var(--green);font-size:11px;font-weight:600">TP</span>
             {% elif reason in ('SL','POSITION_CLOSED_SL') %}
@@ -62,6 +138,10 @@
               <span style="color:var(--blue);font-size:11px;font-weight:600">TRAIL</span>
             {% elif 'MANUAL' in reason or 'EARLY' in reason %}
               <span style="color:var(--yellow);font-size:11px;font-weight:600">MANUAL</span>
+            {% elif 'MAX_HOLD' in reason %}
+              <span style="color:var(--yellow);font-size:11px;font-weight:600">MAX HOLD</span>
+            {% elif 'BUY_SIGNAL' in reason %}
+              <span style="color:var(--blue);font-size:11px;font-weight:600">РАЗВОРОТ</span>
             {% else %}
               <span class="muted" style="font-size:11px">{{ reason[:8] }}</span>
             {% endif %}

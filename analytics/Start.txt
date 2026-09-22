@@ -1,0 +1,4 @@
+python analytics/report.py                          # последние 3 дня
+python analytics/report.py --days 7 --mode REAL
+python analytics/report.py --from 2026-09-15 --to 2026-09-21
+python analytics/report.py --days 7 --no-html        # только консоль
